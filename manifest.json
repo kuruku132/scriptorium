@@ -1,0 +1,9 @@
+{
+  "id": "scriptorium",
+  "name": "Scriptorium",
+  "version": "2.0.0",
+  "minAppVersion": "1.11.4",
+  "description": "RisuAI lorebook translation and live synchronization for Obsidian.",
+  "author": "kuruku132",
+  "isDesktopOnly": false
+}

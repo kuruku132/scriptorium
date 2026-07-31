@@ -1,0 +1,524 @@
+.scriptorium-dashboard {
+  --scriptorium-ok: var(--color-green);
+  --scriptorium-warn: var(--color-orange);
+  --scriptorium-error: var(--color-red);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0 8px 24px;
+}
+
+.scriptorium-dashboard h2,
+.scriptorium-dashboard h3 {
+  margin: 12px 0 8px;
+}
+
+.scriptorium-header {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.scriptorium-status-row,
+.scriptorium-actions,
+.scriptorium-change-head,
+.scriptorium-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.scriptorium-status {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-status.is-on {
+  color: var(--scriptorium-ok);
+}
+
+.scriptorium-status.is-error,
+.scriptorium-conflict {
+  color: var(--scriptorium-error);
+}
+
+.scriptorium-panel {
+  margin-top: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.scriptorium-panel > summary {
+  cursor: pointer;
+  padding: 10px;
+  font-weight: var(--font-semibold);
+}
+
+.scriptorium-panel-body {
+  padding: 0 10px 10px;
+}
+
+.scriptorium-compact-panel > summary {
+  padding-block: 7px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+}
+
+.scriptorium-toolbar-dock {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 24px;
+}
+
+.scriptorium-select-all {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 2px 5px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.scriptorium-select-all:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.scriptorium-select-all input {
+  margin: 0;
+  transform: scale(0.86);
+}
+
+.scriptorium-select-all-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.scriptorium-compact-action {
+  padding: 2px 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-dashboard button.scriptorium-danger-action,
+.scriptorium-dashboard button.scriptorium-danger-action:hover,
+.scriptorium-dashboard button.scriptorium-danger-action:focus {
+  color: var(--text-error);
+}
+
+.scriptorium-selection-option {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.scriptorium-selection-option:last-child {
+  border-bottom: 0;
+}
+
+.scriptorium-selection-option > summary {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+
+.scriptorium-selection-option > summary::marker {
+  content: "";
+}
+
+.scriptorium-selection-option input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.scriptorium-change-expander {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform 120ms ease;
+}
+
+.scriptorium-change-expander svg {
+  width: 13px;
+  height: 13px;
+}
+
+.scriptorium-selection-option[open]
+  > summary
+  .scriptorium-change-expander {
+  transform: rotate(90deg);
+}
+
+.scriptorium-selection-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scriptorium-selection-title {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.scriptorium-change-kind {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+}
+
+.scriptorium-change-kind.is-insert {
+  color: var(--color-green);
+}
+
+.scriptorium-change-kind.is-delete {
+  color: var(--color-red);
+}
+
+.scriptorium-change-kind.is-modify,
+.scriptorium-change-kind.is-split,
+.scriptorium-change-kind.is-merge {
+  color: var(--color-orange);
+}
+
+.scriptorium-change-kind.is-move {
+  color: var(--color-blue);
+}
+
+.scriptorium-change-kind.is-metadata {
+  color: var(--color-purple);
+}
+
+.scriptorium-change-location {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scriptorium-change-preview {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scriptorium-selection-diff {
+  padding: 0 6px 7px 40px;
+}
+
+.scriptorium-document {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.scriptorium-document-row {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 2px;
+  cursor: pointer;
+}
+
+.scriptorium-document-row::marker {
+  content: "";
+}
+
+.scriptorium-document-expander {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform 120ms ease;
+}
+
+.scriptorium-document-expander svg {
+  width: 15px;
+  height: 15px;
+}
+
+.scriptorium-document[open]
+  > .scriptorium-document-row
+  .scriptorium-document-expander {
+  transform: rotate(90deg);
+}
+
+.scriptorium-document-row > input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.scriptorium-document-row a {
+  flex: 1;
+  min-width: 0;
+  color: #fff;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.scriptorium-document-row a:hover,
+.scriptorium-document-row a:focus {
+  color: #fff;
+  text-decoration: none;
+}
+
+.scriptorium-document-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.scriptorium-document-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.scriptorium-document-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.scriptorium-document-conflicts {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.scriptorium-document-changes {
+  margin: 0 0 8px 22px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  background: var(--background-primary-alt);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-file {
+  margin-top: 8px;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+}
+
+.scriptorium-change {
+  padding: 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-primary-alt);
+}
+
+.scriptorium-change pre,
+.scriptorium-selection-diff pre,
+.scriptorium-stream {
+  overflow: auto;
+  white-space: pre-wrap;
+  max-height: 260px;
+  padding: 8px;
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-diff-old {
+  color: var(--text-error);
+}
+
+.scriptorium-diff-new {
+  color: var(--text-success);
+}
+
+.scriptorium-empty {
+  color: var(--text-muted);
+  padding: 12px 0;
+}
+
+.scriptorium-progress {
+  width: 100%;
+}
+
+.scriptorium-pending-file {
+  padding: 2px 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.scriptorium-job-status {
+  margin-top: 8px;
+  padding-right: 4px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: right;
+}
+
+.scriptorium-advanced-tools {
+  position: sticky;
+  z-index: var(--layer-popover, 30);
+  right: 0;
+  bottom: 0;
+  align-self: flex-end;
+  width: 100%;
+  margin-top: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+  background: var(--background-secondary);
+  pointer-events: none;
+}
+
+.scriptorium-advanced-tools > summary {
+  position: relative;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--text-normal);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  text-align: right;
+  pointer-events: auto;
+}
+
+.scriptorium-advanced-tools > summary::marker {
+  content: "";
+}
+
+.scriptorium-advanced-tools > summary::-webkit-details-marker {
+  display: none;
+}
+
+.scriptorium-advanced-tools > summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.scriptorium-advanced-chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.scriptorium-advanced-tools[open] .scriptorium-advanced-chevron {
+  transform: rotate(180deg);
+}
+
+.scriptorium-advanced-tools > .scriptorium-panel-body {
+  position: absolute;
+  right: -1px;
+  bottom: 100%;
+  width: calc(100% + 2px);
+  max-height: min(360px, 55vh);
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-bottom: 0;
+  border-radius: var(--radius-m) var(--radius-m) 0 0;
+  background: var(--background-secondary);
+  box-shadow: 0 -8px 20px rgb(0 0 0 / 14%);
+  pointer-events: auto;
+}
+
+.scriptorium-settings-project {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.scriptorium-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.scriptorium-config-field {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.scriptorium-config-field > label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+}
+
+.scriptorium-config-field input,
+.scriptorium-config-field select,
+.scriptorium-config-field textarea {
+  width: 100%;
+}
+
+.scriptorium-config-field textarea {
+  resize: vertical;
+}
+
+.scriptorium-config-help {
+  margin-bottom: 7px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-document-settings {
+  margin-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 9px;
+}
+
+.scriptorium-document-settings > summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+  font-weight: var(--font-medium);
+}
+
+.scriptorium-document-settings-list {
+  display: grid;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.scriptorium-document-setting {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-small);
+}
+
+.scriptorium-document-setting:last-child {
+  border-bottom: 0;
+}
+
+.scriptorium-document-setting span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.scriptorium-settings-advanced {
+  margin: 12px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: 0 10px 8px;
+}
+
+.scriptorium-settings-advanced > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-weight: var(--font-semibold);
+}

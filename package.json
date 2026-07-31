@@ -1,0 +1,23 @@
+{
+  "name": "scriptorium",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "check:risu": "node --check risuai-plugin/scriptorium.js",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "npm run build && node scripts/deploy.mjs",
+    "relay:deploy": "npm --prefix relay run deploy"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "obsidian": "^1.11.4",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
