@@ -120,7 +120,8 @@ describe("v1 migration", () => {
       name: "Alpha",
       syncMode: "original",
       includeFolderEntries: true,
-      translationPrompt: ""
+      translationPrompt: "",
+      translationGlossary: ""
     });
     expect(migrated.settings.projects[0]?.excludeGlobs).not.toContain(
       "private/**"

@@ -119,7 +119,8 @@ describe("snapshot HTTP contract", () => {
     syncMode: "original" as const,
     excludeGlobs: [],
     includeFolderEntries: true,
-    translationPrompt: ""
+    translationPrompt: "",
+    translationGlossary: ""
   };
   const snapshot = createReadySnapshot(project, {
     type: "risu",

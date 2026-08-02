@@ -66,7 +66,8 @@ export function createProject(
     syncMode: "translated",
     excludeGlobs: [...DEFAULT_EXCLUDE_GLOBS],
     includeFolderEntries: true,
-    translationPrompt: ""
+    translationPrompt: "",
+    translationGlossary: ""
   };
 }
 
@@ -290,6 +291,10 @@ function normalizeProject(raw: unknown): ProjectConfig | null {
     translationPrompt:
       typeof value.translationPrompt === "string"
         ? value.translationPrompt
+        : "",
+    translationGlossary:
+      typeof value.translationGlossary === "string"
+        ? value.translationGlossary
         : ""
   };
 }
@@ -350,6 +355,10 @@ function normalizeModernSettings(raw: unknown): ScriptoriumSettings {
       typeof value.translationPrompt === "string"
         ? value.translationPrompt
         : DEFAULT_SETTINGS.translationPrompt,
+    translationGlossary:
+      typeof value.translationGlossary === "string"
+        ? value.translationGlossary
+        : DEFAULT_SETTINGS.translationGlossary,
     api: {
       baseUrl:
         typeof api.baseUrl === "string"
@@ -416,7 +425,14 @@ function normalizeModernSettings(raw: unknown): ScriptoriumSettings {
       deduplicateKoreanParentheses:
         typeof advanced.deduplicateKoreanParentheses === "boolean"
           ? advanced.deduplicateKoreanParentheses
-          : false
+          : false,
+      maxParallelTranslations: Math.min(
+        8,
+        positiveInteger(
+          advanced.maxParallelTranslations,
+          DEFAULT_SETTINGS.advanced.maxParallelTranslations
+        )
+      )
     },
     migrationWarnings: Array.isArray(value.migrationWarnings)
       ? value.migrationWarnings.map(String)

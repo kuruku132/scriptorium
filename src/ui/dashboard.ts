@@ -21,11 +21,13 @@ export const DASHBOARD_VIEW_TYPE = "scriptorium-dashboard";
 export interface DashboardHost {
   getActiveProject(): ProjectConfig | null;
   getGlobalTranslationPrompt(): string;
+  getGlobalTranslationGlossary(): string;
   getProjectDocumentSettings(): Promise<ProjectDocumentSetting[]>;
   updateActiveProjectSettings(value: {
     name: string;
     syncMode: "original" | "translated";
     translationPrompt: string;
+    translationGlossary: string;
   }): Promise<void>;
   setProjectDocumentIncluded(
     path: string,
@@ -558,6 +560,18 @@ export class ScriptoriumDashboard extends ItemView {
     prompt.value = project.translationPrompt;
     prompt.placeholder = this.host.getGlobalTranslationPrompt();
 
+    const glossaryField = body.createDiv("scriptorium-config-field");
+    glossaryField.createEl("label", { text: "프로젝트 번역 어휘 사전" });
+    glossaryField.createDiv({
+      cls: "scriptorium-config-help",
+      text: "한 줄에 '원문 = 번역어'로 입력합니다. 비워두면 공용 사전을 사용하며, 요청 내용과 관련된 항목만 전달합니다."
+    });
+    const glossary = glossaryField.createEl("textarea");
+    glossary.rows = 7;
+    glossary.value = project.translationGlossary;
+    glossary.placeholder =
+      this.host.getGlobalTranslationGlossary() || "Sword = 검\nMana = 마나";
+
     button(
       body,
       "프로젝트 설정 저장",
@@ -566,7 +580,8 @@ export class ScriptoriumDashboard extends ItemView {
           name: name.value,
           syncMode:
             mode.value === "original" ? "original" : "translated",
-          translationPrompt: prompt.value
+          translationPrompt: prompt.value,
+          translationGlossary: glossary.value
         }),
       "save"
     );

@@ -46,6 +46,21 @@ export class ScriptoriumSettingTab extends PluginSettingTab {
           });
       });
     new Setting(containerEl)
+      .setName("공용 번역 어휘 사전")
+      .setDesc(
+        "한 줄에 '원문 = 번역어' 형식으로 입력합니다. 요청 내용에 어느 한쪽 표현이 있는 항목만 번역 프롬프트에 추가됩니다."
+      )
+      .addTextArea((area) => {
+        area.inputEl.rows = 8;
+        area
+          .setPlaceholder("Sword = 검\nMana = 마나")
+          .setValue(this.host.settings.translationGlossary)
+          .onChange(async (value) => {
+            this.host.settings.translationGlossary = value;
+            await this.host.saveSettings();
+          });
+      });
+    new Setting(containerEl)
       .setName("OpenAI 호환 API 주소")
       .addText((text) =>
         text
@@ -78,6 +93,26 @@ export class ScriptoriumSettingTab extends PluginSettingTab {
       cls: "scriptorium-settings-advanced"
     });
     advanced.createEl("summary", { text: "고급 설정" });
+    advanced.createEl("h4", { text: "병렬 번역" });
+    new Setting(advanced)
+      .setName("동시 번역 요청 수")
+      .setDesc(
+        "1~8개. 요청은 병렬로 처리하되 같은 문서의 결과는 원래 순서대로 저장합니다. 1이면 직전 새 번역도 다음 조각의 문맥으로 사용합니다."
+      )
+      .addText((text) =>
+        text
+          .setValue(
+            String(this.host.settings.advanced.maxParallelTranslations)
+          )
+          .onChange(async (value) => {
+            const number = Number(value);
+            if (Number.isInteger(number) && number >= 1 && number <= 8) {
+              this.host.settings.advanced.maxParallelTranslations = number;
+              await this.host.saveSettings();
+            }
+          })
+      );
+    advanced.createEl("h4", { text: "API 및 후처리" });
     new Setting(advanced)
       .setName("API 프록시 URL")
       .setDesc(

@@ -32,6 +32,7 @@ export interface ProjectConfig {
   excludeGlobs: string[];
   includeFolderEntries: boolean;
   translationPrompt: string;
+  translationGlossary: string;
 }
 
 export interface ApiSettings {
@@ -59,12 +60,14 @@ export interface RelaySettings {
 
 export interface AdvancedSettings {
   deduplicateKoreanParentheses: boolean;
+  maxParallelTranslations: number;
 }
 
 export interface ScriptoriumSettings {
   version: typeof DATA_VERSION;
   projects: ProjectConfig[];
   translationPrompt: string;
+  translationGlossary: string;
   api: ApiSettings;
   localServer: LocalServerSettings;
   relay: RelaySettings;
@@ -165,6 +168,8 @@ export interface TranslationRequestBlock {
   headingPath: string[];
   contextBefore: string | null;
   contextAfter: string | null;
+  translatedContextBefore: string | null;
+  translatedContextAfter: string | null;
 }
 
 export interface TranslationBatch {
@@ -260,6 +265,7 @@ export const DEFAULT_SETTINGS: ScriptoriumSettings = {
   projects: [],
   translationPrompt:
     "Translate the supplied RisuAI lorebook Markdown faithfully. Preserve Markdown structure, names, tone, and formatting.",
+  translationGlossary: "",
   api: {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-5-mini",
@@ -281,7 +287,8 @@ export const DEFAULT_SETTINGS: ScriptoriumSettings = {
     autoPush: true
   },
   advanced: {
-    deduplicateKoreanParentheses: false
+    deduplicateKoreanParentheses: false,
+    maxParallelTranslations: 3
   },
   migrationWarnings: []
 };

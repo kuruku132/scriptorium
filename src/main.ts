@@ -601,6 +601,10 @@ export default class ScriptoriumPlugin
     return this.settings.translationPrompt;
   }
 
+  getGlobalTranslationGlossary(): string {
+    return this.settings.translationGlossary;
+  }
+
   async getProjectDocumentSettings(): Promise<ProjectDocumentSetting[]> {
     return this.activeProject
       ? readProjectDocumentSettings(this.app, this.activeProject)
@@ -611,12 +615,14 @@ export default class ScriptoriumPlugin
     name: string;
     syncMode: "original" | "translated";
     translationPrompt: string;
+    translationGlossary: string;
   }): Promise<void> {
     const project = this.activeProject;
     if (!project) return;
     project.name = value.name.trim() || project.name;
     project.syncMode = value.syncMode;
     project.translationPrompt = value.translationPrompt;
+    project.translationGlossary = value.translationGlossary;
     await this.saveSettings();
     this.relay.resetHash();
     await this.rescan();
@@ -967,6 +973,11 @@ export default class ScriptoriumPlugin
       globalPrompt:
         project.translationPrompt.trim() ||
         this.settings.translationPrompt,
+      glossary:
+        project.translationGlossary.trim() ||
+        this.settings.translationGlossary,
+      maxParallel:
+        this.settings.advanced.maxParallelTranslations,
       onProgress: (progress) => {
         this.translationProgress = progress;
         this.refreshDashboard();

@@ -276,41 +276,6 @@ export async function importRisuLorebook(
   return { created, overwritten, skipped };
 }
 
-function renderTree(root: string, relativePaths: string[]): string {
-  interface TreeNode {
-    directories: Map<string, TreeNode>;
-    files: string[];
-  }
-  const tree: TreeNode = { directories: new Map(), files: [] };
-  for (const path of relativePaths) {
-    const parts = path.split("/");
-    let node = tree;
-    for (const directory of parts.slice(0, -1)) {
-      const child = node.directories.get(directory) ?? {
-        directories: new Map(),
-        files: []
-      };
-      node.directories.set(directory, child);
-      node = child;
-    }
-    const filename = parts.at(-1);
-    if (filename) node.files.push(filename);
-  }
-  const lines = [root.split("/").at(-1) || root];
-  const walk = (node: TreeNode, indent: string) => {
-    const directories = [...node.directories.entries()].sort(([a], [b]) =>
-      a.localeCompare(b)
-    );
-    for (const [name, child] of directories) {
-      lines.push(`${indent}├─ ${name}/`);
-      walk(child, `${indent}│  `);
-    }
-    for (const file of node.files.sort()) lines.push(`${indent}└─ ${file}`);
-  };
-  walk(tree, "  ");
-  return lines.join("\n");
-}
-
 export async function mergeProjectMarkdown(
   app: App,
   project: ProjectConfig
@@ -319,33 +284,14 @@ export async function mergeProjectMarkdown(
   const files = (await listSourceFiles(app, project)).filter(
     (file) => file.path !== outputPath
   );
-  const relativePaths = files.map((file) =>
-    relativeProjectPath(project, file.path)
-  );
-  const lines = [
-    "# 통합 프로젝트 문서 컨텍스트",
-    "",
-    "## 1. 디렉터리 구조",
-    "```text",
-    renderTree(project.root, relativePaths),
-    "```",
-    "",
-    "## 2. 파일별 상세 내용",
-    `총 ${files.length}개의 파일이 포함됩니다.`,
-    ""
-  ];
-  for (const [index, file] of files.entries()) {
+  const lines = ["# 통합 문서", ""];
+  for (const file of files) {
     const relative = relativeProjectPath(project, file.path);
     const content = await app.vault.cachedRead(file);
     lines.push(
-      `### [${index + 1}] 파일 경로: ${relative}`,
-      `<!-- START OF ${relative} -->`,
-      "```markdown",
-      content.trim() || "(비어 있음)",
-      "```",
-      `<!-- END OF ${relative} -->`,
+      `## ${relative}`,
       "",
-      "=".repeat(50),
+      content.trim() || "(비어 있음)",
       ""
     );
   }

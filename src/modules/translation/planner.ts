@@ -389,7 +389,8 @@ export function planFileChanges(options: {
 
 function toRequestBlock(
   change: ChangeGroup,
-  block: MarkdownBlock
+  block: MarkdownBlock,
+  currentTranslations: Record<string, string>
 ): TranslationRequestBlock {
   return {
     id: block.id,
@@ -397,7 +398,13 @@ function toRequestBlock(
     kind: block.kind,
     headingPath: [...block.headingPath],
     contextBefore: change.contextBefore?.text ?? null,
-    contextAfter: change.contextAfter?.text ?? null
+    contextAfter: change.contextAfter?.text ?? null,
+    translatedContextBefore: change.contextBefore
+      ? currentTranslations[change.contextBefore.id] ?? null
+      : null,
+    translatedContextAfter: change.contextAfter
+      ? currentTranslations[change.contextAfter.id] ?? null
+      : null
   };
 }
 
@@ -427,7 +434,9 @@ export function createTranslationBatches(
       const pendingIds = new Set(file.pendingTranslationIds);
       const blocks = change.newBlocks
         .filter((block) => !pendingIds.has(block.id))
-        .map((block) => toRequestBlock(change, block));
+        .map((block) =>
+          toRequestBlock(change, block, file.currentTranslations)
+        );
       const keys =
         change.kind === "metadata"
           ? extractKeys(
@@ -448,7 +457,9 @@ export function createTranslationBatches(
               characters:
                 block.source.length +
                 (block.contextBefore?.length ?? 0) +
-                (block.contextAfter?.length ?? 0)
+                (block.contextAfter?.length ?? 0) +
+                (block.translatedContextBefore?.length ?? 0) +
+                (block.translatedContextAfter?.length ?? 0)
             }))
           : [{ block: null, characters: keys.join("").length }];
 
