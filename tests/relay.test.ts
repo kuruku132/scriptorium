@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { handleRequest } from "../relay/src/worker.mjs";
+// @ts-expect-error Cloudflare dashboard requires the upload entry point to be plain JS.
+import { handleRequest } from "../relay/_worker.js";
 
 class MemoryKv {
   private values = new Map<string, string>();
@@ -20,6 +21,19 @@ const snapshot = {
 };
 
 describe("relay Worker", () => {
+  it("reports a missing dashboard KV binding", async () => {
+    const response = await handleRequest(
+      new Request("https://relay.test/v1/channels/demo/snapshot"),
+      {}
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "missing-kv-binding",
+      binding: "SNAPSHOTS"
+    });
+  });
+
   it("stores, serves, and validates ETags", async () => {
     const env = { SNAPSHOTS: new MemoryKv(), BEARER_TOKEN: "" };
     const url = "https://relay.test/v1/channels/demo/snapshot";

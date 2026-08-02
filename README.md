@@ -116,7 +116,7 @@ RisuAI 클라이언트 플러그인은
 
 ## 릴레이
 
-Worker 소스와 수동 배포 절차는 [`relay/README.md`](relay/README.md)에
+대시보드 업로드용 Worker와 설정 절차는 [`relay/README.md`](relay/README.md)에
 있습니다. 저장소는 Worker를 자동 배포하지 않습니다.
 
 ## DEBUG 로그

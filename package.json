@@ -11,8 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "npm run build && node scripts/deploy.mjs",
-    "finalize": "node scripts/finalize.mjs",
-    "relay:deploy": "npm --prefix relay run deploy"
+    "finalize": "node scripts/finalize.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

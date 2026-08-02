@@ -22,9 +22,7 @@ function authorized(request, token) {
 }
 
 function channelFrom(url) {
-  const match = url.pathname.match(
-    /^\/v1\/channels\/([^/]+)\/snapshot$/
-  );
+  const match = url.pathname.match(/^\/v1\/channels\/([^/]+)\/snapshot$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -47,11 +45,15 @@ export async function handleRequest(request, env) {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
+
   const url = new URL(request.url);
   const channel = channelFrom(url);
   if (!channel) return json({ error: "not-found" }, 404);
-  if (!authorized(request, env.BEARER_TOKEN)) {
+  if (!authorized(request, env?.BEARER_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
+  }
+  if (!env?.SNAPSHOTS) {
+    return json({ error: "missing-kv-binding", binding: "SNAPSHOTS" }, 500);
   }
 
   const key = `channel:${channel}`;
@@ -76,9 +78,7 @@ export async function handleRequest(request, env) {
     if (!stored) return json({ error: "channel-empty" }, 404);
     const snapshot = JSON.parse(stored);
     const etag = `"${snapshot.hash}"`;
-    if (
-      request.headers.get("If-None-Match")?.replace(/^W\//, "") === etag
-    ) {
+    if (request.headers.get("If-None-Match")?.replace(/^W\//, "") === etag) {
       return new Response(null, {
         status: 304,
         headers: { ...CORS_HEADERS, ETag: etag, "Cache-Control": "no-store" }
