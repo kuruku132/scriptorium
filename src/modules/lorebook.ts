@@ -1,7 +1,8 @@
 import type { App } from "obsidian";
-import { parseMarkdown } from "../shared/markdown";
+import { parseMarkdown, stableHash } from "../shared/markdown";
 import {
   type FileCache,
+  type LorebookDocumentProject,
   type LorebookSnapshot,
   type ProjectConfig,
   type SourceDocument
@@ -13,6 +14,7 @@ import {
 } from "./project";
 import {
   compileLorebookDocuments,
+  compileLorebookDocumentUnits,
   createNoProjectSnapshot,
   createReadySnapshot
 } from "./lorebook-core";
@@ -63,6 +65,33 @@ export async function compileSnapshot(
       includeFolderEntries: project.includeFolderEntries
     })
   );
+}
+
+export async function compileDocumentProject(
+  app: App,
+  project: ProjectConfig,
+  files: Record<string, FileCache>
+): Promise<LorebookDocumentProject> {
+  const documents = await loadProjectDocuments(app, project, files);
+  const units = compileLorebookDocumentUnits(documents, project.syncMode, {
+    projectRoot: project.root,
+    includeFolderEntries: project.includeFolderEntries
+  });
+  const projectInfo = { id: project.id, name: project.name };
+  const revision = stableHash(
+    JSON.stringify({
+      project: projectInfo,
+      mode: project.syncMode,
+      documents: units.map(({ id, path, hash }) => ({ id, path, hash }))
+    })
+  );
+  return {
+    schema: 1,
+    project: projectInfo,
+    mode: project.syncMode,
+    revision,
+    documents: units
+  };
 }
 
 export async function exportLorebookJson(

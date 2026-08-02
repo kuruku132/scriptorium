@@ -8,6 +8,7 @@ import {
   WorkspaceLeaf
 } from "obsidian";
 import {
+  compileDocumentProject,
   compileSnapshot,
   exportLorebookJson
 } from "./modules/lorebook";
@@ -61,6 +62,7 @@ import {
   type ChangeGroup,
   type FileCache,
   type FileChangePlan,
+  type LorebookDocumentProject,
   type ProjectCache,
   type ProjectChangePlan,
   type ProjectConfig,
@@ -79,6 +81,8 @@ import {
   ScriptoriumSettingTab,
   type SettingsHost
 } from "./ui/settings";
+
+const DEBUG = false;
 
 class ProjectFolderModal extends FuzzySuggestModal<TFolder> {
   constructor(
@@ -160,6 +164,10 @@ export default class ScriptoriumPlugin
   private renameGuard = false;
   private suppressVaultScan = 0;
   private localServer!: LocalSnapshotServer;
+  private documentProjects = new Map<
+    string,
+    Promise<LorebookDocumentProject>
+  >();
   private relay!: RelaySynchronizer;
   private syncStatus: SyncStatus = {
     local: "off",
@@ -180,7 +188,15 @@ export default class ScriptoriumPlugin
     await this.saveSettings();
 
     this.localServer = new LocalSnapshotServer(
-      () => this.getSnapshot(),
+      (projectId) => this.getSnapshot(projectId),
+      () =>
+        this.settings.projects.map((project) => ({
+          id: project.id,
+          name: project.name,
+          mode: project.syncMode
+        })),
+      (projectId) => this.getDocumentProject(projectId),
+      (event, details) => this.debug(event, details),
       (message, error) => {
         this.syncStatus.local = error
           ? "error"
@@ -335,6 +351,17 @@ export default class ScriptoriumPlugin
   }
 
   private onVaultChange(file: TAbstractFile): void {
+    const changedProject = findProjectForPath(this.settings.projects, file.path);
+    if (changedProject) {
+      const deleted = this.documentProjects.delete(changedProject.id);
+      this.debug("cache.invalidate.vault", {
+        projectId: changedProject.id,
+        path: file.path,
+        type: file.constructor.name,
+        hadCache: deleted,
+        suppressedScan: this.suppressVaultScan > 0
+      });
+    }
     if (this.suppressVaultScan > 0) return;
     const project = this.activeProject;
     if (!project || !(file instanceof TFile) || file.extension !== "md") return;
@@ -351,6 +378,16 @@ export default class ScriptoriumPlugin
     oldPath: string
   ): Promise<void> {
     if (this.renameGuard || !(file instanceof TFile)) return;
+    const previousProject = findProjectForPath(this.settings.projects, oldPath);
+    const renamedProject = findProjectForPath(this.settings.projects, file.path);
+    if (previousProject) this.documentProjects.delete(previousProject.id);
+    if (renamedProject) this.documentProjects.delete(renamedProject.id);
+    this.debug("cache.invalidate.rename", {
+      oldPath,
+      newPath: file.path,
+      previousProjectId: previousProject?.id ?? "",
+      renamedProjectId: renamedProject?.id ?? ""
+    });
     const project =
       findProjectForPath(this.settings.projects, oldPath) ??
       findProjectForPath(this.settings.projects, file.path);
@@ -612,20 +649,40 @@ export default class ScriptoriumPlugin
   }
 
   async updateActiveProjectSettings(value: {
+    projectId: string;
     name: string;
     syncMode: "original" | "translated";
     translationPrompt: string;
     translationGlossary: string;
   }): Promise<void> {
-    const project = this.activeProject;
+    const project = this.settings.projects.find(
+      (entry) => entry.id === value.projectId
+    );
     if (!project) return;
-    project.name = value.name.trim() || project.name;
+    const nextName = value.name.trim() || project.name;
+    if (
+      project.name === nextName &&
+      project.syncMode === value.syncMode &&
+      project.translationPrompt === value.translationPrompt &&
+      project.translationGlossary === value.translationGlossary
+    ) {
+      return;
+    }
+    project.name = nextName;
     project.syncMode = value.syncMode;
     project.translationPrompt = value.translationPrompt;
     project.translationGlossary = value.translationGlossary;
+    this.documentProjects.delete(project.id);
+    this.debug("cache.invalidate.project-settings", {
+      projectId: project.id,
+      name: project.name,
+      mode: project.syncMode
+    });
     await this.saveSettings();
     this.relay.resetHash();
-    await this.rescan();
+    if (this.activeProject?.id === project.id) await this.rescan();
+    else this.refreshDashboard();
+    new Notice(`프로젝트 설정을 저장했습니다: ${project.name}`);
   }
 
   async setProjectDocumentIncluded(
@@ -1110,10 +1167,67 @@ export default class ScriptoriumPlugin
     }
   }
 
-  private async getSnapshot() {
-    const project = this.activeProject;
+  private async getSnapshot(projectId?: string) {
+    const project = projectId
+      ? this.settings.projects.find((entry) => entry.id === projectId) ?? null
+      : this.activeProject;
     const files = project ? this.projectCache(project).files : {};
     return compileSnapshot(this.app, project, files);
+  }
+
+  private getDocumentProject(
+    projectId: string
+  ): Promise<LorebookDocumentProject | null> {
+    const project = this.settings.projects.find((entry) => entry.id === projectId);
+    if (!project) {
+      this.debug("document-project.not-found", { projectId });
+      return Promise.resolve(null);
+    }
+    const cached = this.documentProjects.get(project.id);
+    if (cached) {
+      this.debug("document-project.cache-hit", { projectId });
+      return cached;
+    }
+    const startedAt = Date.now();
+    this.debug("document-project.compile.begin", {
+      projectId,
+      name: project.name,
+      mode: project.syncMode
+    });
+    const compiled = compileDocumentProject(
+      this.app,
+      project,
+      this.projectCache(project).files
+    ).catch((error) => {
+      this.documentProjects.delete(project.id);
+      this.debug("document-project.compile.error", {
+        projectId,
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - startedAt
+      });
+      throw error;
+    });
+    this.documentProjects.set(project.id, compiled);
+    void compiled.then(
+      (result) => {
+        this.debug("document-project.compile.done", {
+          projectId,
+          revision: result.revision,
+          documentCount: result.documents.length,
+          elapsedMs: Date.now() - startedAt
+        });
+      },
+      () => undefined
+    );
+    return compiled;
+  }
+
+  private debug(event: string, details: Record<string, unknown> = {}): void {
+    if (!DEBUG) return;
+    console.debug(
+      `[Scriptorium DEBUG ${new Date().toISOString()}] ${event}`,
+      details
+    );
   }
 
   async rebuildCache(): Promise<void> {
@@ -1152,6 +1266,7 @@ export default class ScriptoriumPlugin
       (entry) => entry.id !== project.id
     );
     delete this.data.caches[project.id];
+    this.documentProjects.delete(project.id);
     this.activeProject = null;
     this.changePlan = null;
     await this.saveSettings();

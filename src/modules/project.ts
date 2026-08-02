@@ -213,7 +213,11 @@ export async function atomicWriteVaultFile(
   await ensureParentFolders(app, path);
   const adapter = app.vault.adapter;
   if (adapter instanceof FileSystemAdapter) {
-    const { writeFile, rename, rm } = await import("node:fs/promises");
+    // This branch only runs on desktop. Use CommonJS resolution so Electron
+    // does not hand a dynamic `node:` import to the renderer module loader.
+    const { writeFile, rename, rm } = require(
+      "node:fs/promises"
+    ) as typeof import("node:fs/promises");
     const fullPath = adapter.getFullPath(path);
     const temporaryPath = `${fullPath}.scriptorium-${Date.now()}.tmp`;
     await writeFile(temporaryPath, content, "utf8");
