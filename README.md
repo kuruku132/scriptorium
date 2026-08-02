@@ -23,6 +23,10 @@ npm run build
 SecretStorage에 저장하며 Scriptorium의 `data.json`에는 선택한 비밀값의
 이름만 기록됩니다.
 
+최종 검증과 로컬 배포는 `npm run finalize` 한 번으로 실행합니다. 타입 검사,
+테스트, 빌드, Obsidian 플러그인 폴더 배포와 산출물 해시 검증을 순서대로
+수행합니다.
+
 ## 프로젝트
 
 명령 팔레트의 `Scriptorium: 프로젝트 등록`으로 정확한 루트 폴더를

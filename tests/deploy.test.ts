@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { deployArtifacts } from "../scripts/deploy.mjs";
+import { verifyArtifacts } from "../scripts/finalize.mjs";
 
 describe("local deployment", () => {
   it("copies only build artifacts and preserves plugin data", async () => {
@@ -20,9 +21,17 @@ describe("local deployment", () => {
     const configPath = join(root, "deploy.local.json");
     await writeFile(configPath, JSON.stringify({ target }), "utf8");
 
-    await deployArtifacts({ source, configPath });
+    const deployedTarget = await deployArtifacts({ source, configPath });
+    const hashes = await verifyArtifacts(source, deployedTarget);
 
     expect(await readFile(join(target, "main.js"), "utf8")).toBe("main.js");
+    expect(
+      hashes.map((entry: { artifact: string }) => entry.artifact)
+    ).toEqual([
+      "main.js",
+      "manifest.json",
+      "styles.css"
+    ]);
     expect(await readFile(join(target, "data.json"), "utf8")).toBe(
       "user-data"
     );
