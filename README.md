@@ -35,7 +35,8 @@ SecretStorage에 저장하며 Scriptorium의 `data.json`에는 선택한 비밀�
 플러그인 데이터에 저장됩니다.
 
 프로젝트 이름, 원문/번역 동기화 모드, 프로젝트별 번역 프롬프트와 어휘 사전은
-대시보드의 `프로젝트 설정`에서 관리합니다. 문서 제외 규칙은 glob 문자열을
+대시보드의 `프로젝트 설정`에서 관리하며 변경하면 자동 저장 알림과 함께
+반영됩니다. 문서 제외 규칙은 glob 문자열을
 사용하지 않습니다. 같은 패널의 문서 목록에서 체크를 끄면 해당 Markdown
 frontmatter에 `scriptorium: false`가 기록됩니다.
 
@@ -69,20 +70,23 @@ frontmatter에 `scriptorium: false`가 기록됩니다.
 ## RisuAI에서 스냅샷 읽기
 
 로컬 서버는 데스크톱에서만 사용할 수 있고 기본 주소는
-`http://127.0.0.1:27124/v1/snapshot`입니다. 릴레이는 데스크톱과 모바일에서
-모두 사용할 수 있습니다.
+`http://127.0.0.1:27124`입니다. RisuAI 클라이언트는 다음 전용 API를
+사용합니다.
+
+- `GET /v1/projects`: 등록된 프로젝트 목록
+- `GET /v1/projects/{projectId}/manifest`: 문서 ID·경로·해시 목록
+- `GET /v1/projects/{projectId}/documents/{documentId}`: 요청한 문서의
+  로어북 항목
+
+클라이언트는 manifest의 해시를 기존 캐시와 비교하고 추가·수정된 문서만
+개별 요청합니다. 목록에서 사라진 문서는 캐시에서 삭제합니다. 최초 연결 때만
+프로젝트의 모든 문서를 받고, 변경이 없으면 RisuAI의 `nativeFetch` 브리지와
+호환되는 `200 + status: "not-modified"` 최소 응답이 반환됩니다. 기존
+`/v1/snapshot`은 릴레이 및 이전 클라이언트 호환을 위해
+유지합니다. 릴레이는 데스크톱과 모바일에서 모두 사용할 수 있습니다.
 
 ```js
 let etag = "";
-
-async function pollLocal() {
-  const response = await fetch("http://127.0.0.1:27124/v1/snapshot", {
-    headers: etag ? { "If-None-Match": etag } : {}
-  });
-  if (response.status === 304) return null;
-  etag = response.headers.get("ETag") ?? "";
-  return response.json();
-}
 
 async function pollRelay(workerUrl, channel, token = "") {
   const response = await fetch(
@@ -107,10 +111,16 @@ RisuAI 클라이언트 플러그인은
 [`risuai-plugin/scriptorium.js`](risuai-plugin/scriptorium.js)에 있습니다.
 설치와 로컬/릴레이 연결 방법은
 [`risuai-plugin/README.md`](risuai-plugin/README.md)를 참고하세요. 클라이언트는
-ETag 기반으로 변경된 스냅샷만 읽으며, 캐릭터마다 연결한 `project.id`가
-일치할 때만 로어북을 교체합니다.
+로컬 연결에서는 등록된 프로젝트 목록 중 하나를 캐릭터마다 선택할 수 있으며,
+활성 문서와 무관하게 연결한 `project.id`의 변경 문서만 요청합니다.
 
 ## 릴레이
 
 Worker 소스와 수동 배포 절차는 [`relay/README.md`](relay/README.md)에
 있습니다. 저장소는 Worker를 자동 배포하지 않습니다.
+
+## DEBUG 로그
+
+소스의 `DEBUG` 상수가 `true`이면 개발자 콘솔에 `[Scriptorium DEBUG ...]`
+접두사로 서버 시작/종료, 모든 HTTP 요청과 응답 상태, manifest 컴파일 캐시
+적중/무효화, 소요 시간이 기록됩니다. 기본값은 `false`입니다.

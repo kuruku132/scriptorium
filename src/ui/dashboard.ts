@@ -24,6 +24,7 @@ export interface DashboardHost {
   getGlobalTranslationGlossary(): string;
   getProjectDocumentSettings(): Promise<ProjectDocumentSetting[]>;
   updateActiveProjectSettings(value: {
+    projectId: string;
     name: string;
     syncMode: "original" | "translated";
     translationPrompt: string;
@@ -200,6 +201,7 @@ export class ScriptoriumDashboard extends ItemView {
   private projectSettingsOpen = false;
   private documentSettingsOpen = false;
   private advancedToolsOpen = false;
+  private projectSettingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -571,20 +573,32 @@ export class ScriptoriumDashboard extends ItemView {
     glossary.value = project.translationGlossary;
     glossary.placeholder =
       this.host.getGlobalTranslationGlossary() || "Sword = 검\nMana = 마나";
+    body.createDiv({
+      cls: "scriptorium-config-help",
+      text: "변경 사항은 자동으로 저장됩니다."
+    });
 
-    button(
-      body,
-      "프로젝트 설정 저장",
-      () =>
-        this.host.updateActiveProjectSettings({
-          name: name.value,
-          syncMode:
-            mode.value === "original" ? "original" : "translated",
-          translationPrompt: prompt.value,
-          translationGlossary: glossary.value
-        }),
-      "save"
-    );
+    const scheduleSave = (delay = 700) => {
+      if (this.projectSettingsSaveTimer) {
+        clearTimeout(this.projectSettingsSaveTimer);
+      }
+      const value = {
+        projectId: project.id,
+        name: name.value,
+        syncMode:
+          mode.value === "original" ? "original" as const : "translated" as const,
+        translationPrompt: prompt.value,
+        translationGlossary: glossary.value
+      };
+      this.projectSettingsSaveTimer = setTimeout(() => {
+        this.projectSettingsSaveTimer = null;
+        void this.host.updateActiveProjectSettings(value);
+      }, delay);
+    };
+    name.addEventListener("input", () => scheduleSave());
+    prompt.addEventListener("input", () => scheduleSave());
+    glossary.addEventListener("input", () => scheduleSave());
+    mode.addEventListener("change", () => scheduleSave(0));
 
     const ignore = body.createEl("details", {
       cls: "scriptorium-document-settings",
