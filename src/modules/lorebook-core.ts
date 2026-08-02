@@ -7,6 +7,7 @@ import {
 import {
   SNAPSHOT_SCHEMA,
   type LorebookSnapshot,
+  type LorebookDocumentUnit,
   type ProjectConfig,
   type RisuEntry,
   type RisuEntryMode,
@@ -79,7 +80,21 @@ export function compileLorebookDocuments(
   mode: SyncMode,
   options: LorebookCompileOptions = {}
 ): RisuLorebook {
-  const data: RisuEntry[] = [];
+  return {
+    type: "risu",
+    ver: 1,
+    data: compileLorebookDocumentUnits(documents, mode, options).flatMap(
+      (document) => document.entries
+    )
+  };
+}
+
+export function compileLorebookDocumentUnits(
+  documents: SourceDocument[],
+  mode: SyncMode,
+  options: LorebookCompileOptions = {}
+): LorebookDocumentUnit[] {
+  const units: LorebookDocumentUnit[] = [];
   const folderKeys = new Map<string, string>();
   const sorted = [...documents].sort((left, right) =>
     left.path.localeCompare(right.path)
@@ -136,7 +151,12 @@ export function compileLorebookDocuments(
         };
         const parentKey = parent ? folderKeys.get(parent) : undefined;
         if (parentKey) folderEntry.folder = parentKey;
-        data.push(folderEntry);
+        units.push({
+          id: `folder:${id}`,
+          path: current,
+          hash: stableHash(JSON.stringify(folderEntry)),
+          entries: [folderEntry]
+        });
       }
     }
 
@@ -163,9 +183,14 @@ export function compileLorebookDocuments(
         ? folderKeys.get(folderPath)
         : undefined;
     if (folderKey) entry.folder = folderKey;
-    data.push(entry);
+    units.push({
+      id: `document:${stableHash(document.path)}`,
+      path: document.path,
+      hash: stableHash(JSON.stringify({ mode, entry })),
+      entries: [entry]
+    });
   }
-  return { type: "risu", ver: 1, data };
+  return units;
 }
 
 export function createReadySnapshot(

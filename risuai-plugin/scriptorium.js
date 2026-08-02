@@ -15,8 +15,79 @@
 
 (async () => {
   const SNAPSHOT_SCHEMA = 1;
+  const DEBUG = false;
   const DEFAULT_PORT = 27124;
   const DEFAULT_INTERVAL = 3;
+  const REQUEST_TIMEOUT_MS = 12_000;
+  const INSTANCE_ID = `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+
+  const normalizeActivationKeys = (value) =>
+    typeof value === "string"
+      ? value
+          .split(",")
+          .map((key) => key.trim())
+          .filter(Boolean)
+          .join(",")
+      : value;
+
+  const withTimeout = (promise, label, timeoutMs = REQUEST_TIMEOUT_MS) =>
+    new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(
+        () => reject(new Error(`${label} 제한 시간 초과`)),
+        timeoutMs
+      );
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timeoutId);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        }
+      );
+    });
+
+  const nativeFetch = async (url, options = {}) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const startedAt = Date.now();
+    try {
+      debug("nativeFetch.begin", {
+        url,
+        method: options.method || "GET",
+        timeoutMs: REQUEST_TIMEOUT_MS
+      });
+      const response = await withTimeout(
+        risuai.nativeFetch(url, {
+          ...options,
+          signal: controller.signal,
+        }),
+        `네트워크 요청: ${url}`
+      );
+      debug("nativeFetch.done", {
+        url,
+        status: response.status,
+        elapsedMs: Date.now() - startedAt
+      });
+      return response;
+    } catch (error) {
+      debug("nativeFetch.error", {
+        url,
+        aborted: controller.signal.aborted,
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - startedAt
+      });
+      if (controller.signal.aborted) {
+        throw new Error(`네트워크 요청 제한 시간 초과: ${url}`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
 
   const parseProjectMappings = (raw) => {
     let value;
@@ -93,7 +164,7 @@
     };
   };
 
-  const endpointFor = (settings) => {
+  const endpointFor = (settings, projectId = "") => {
     if (settings.relayUrl) {
       if (!settings.relayChannel) {
         throw new Error("릴레이 채널을 입력해 주세요");
@@ -102,8 +173,26 @@
         settings.relayChannel
       )}/snapshot`;
     }
-    return `http://${settings.host}:${settings.port}/v1/snapshot`;
+    const query = projectId
+      ? `?project=${encodeURIComponent(projectId)}`
+      : "";
+    return `http://${settings.host}:${settings.port}/v1/snapshot${query}`;
   };
+
+  const projectsEndpointFor = (settings) =>
+    settings.relayUrl
+      ? ""
+      : `http://${settings.host}:${settings.port}/v1/projects`;
+
+  const manifestEndpointFor = (settings, projectId) =>
+    `http://${settings.host}:${settings.port}/v1/projects/${encodeURIComponent(
+      projectId
+    )}/manifest`;
+
+  const documentEndpointFor = (settings, projectId, documentId) =>
+    `http://${settings.host}:${settings.port}/v1/projects/${encodeURIComponent(
+      projectId
+    )}/documents/${encodeURIComponent(documentId)}`;
 
   const responseHeader = (response, name) => {
     if (!response || !response.headers) return "";
@@ -144,19 +233,26 @@
 
   let cfg = await loadSettings();
   let etag = "";
+  let etagEndpoint = "";
   let isSyncing = false;
   let timerId = null;
+  let pollTick = 0;
+  const documentCaches = new Map();
 
   const state = {
     connected: false,
     skipped: false,
     skipReason: "",
     lastSyncTime: null,
+    lastCheckTime: null,
+    lastAttemptTime: null,
     lastSyncCount: null,
     lastMode: null,
     lastProject: null,
     currentBotName: "",
     remoteProject: null,
+    availableProjects: [],
+    selectedProjectId: "",
     logs: [],
   };
 
@@ -210,7 +306,11 @@
       }
     }
 
-    els.pollBadge.textContent = `${cfg.pollMs / 1000}초 폴링`;
+    els.pollBadge.textContent = `${cfg.pollMs / 1000}초 폴링${
+      DEBUG ? " · DEBUG" : ""
+    }`;
+    els.infoAttempt.textContent = fmt(state.lastAttemptTime);
+    els.infoCheck.textContent = fmt(state.lastCheckTime);
     els.infoTime.textContent = fmt(state.lastSyncTime);
     els.infoCount.textContent =
       state.lastSyncCount === null ? "—" : `${state.lastSyncCount}개`;
@@ -246,8 +346,33 @@
       els.botProjectLabel.className = "sync-badge";
     }
 
-    els.btnMap.disabled =
-      !state.connected || !state.currentBotName || !state.remoteProject;
+    const selectableProjects = [...state.availableProjects];
+    const knownProjects = [mapping, state.remoteProject].filter(Boolean);
+    for (const project of knownProjects) {
+      if (!selectableProjects.some((entry) => entry.id === project.id)) {
+        selectableProjects.push(project);
+      }
+    }
+    const previousSelection =
+      state.selectedProjectId || mapping?.id || state.remoteProject?.id || "";
+    els.projectSelect.innerHTML = selectableProjects.length
+      ? selectableProjects
+          .map(
+            (project) =>
+              `<option value="${esc(project.id)}">${esc(project.name)}${
+                project.mode ? ` · ${esc(project.mode)}` : ""
+              }</option>`
+          )
+          .join("")
+      : '<option value="">프로젝트를 불러오지 못했습니다</option>';
+    if (selectableProjects.some((project) => project.id === previousSelection)) {
+      els.projectSelect.value = previousSelection;
+      state.selectedProjectId = previousSelection;
+    } else {
+      state.selectedProjectId = els.projectSelect.value || "";
+    }
+
+    els.btnMap.disabled = !state.currentBotName || !state.selectedProjectId;
     els.btnUnmap.disabled = !state.currentBotName || !mapping;
 
     const mappings = Object.entries(cfg.botProjects);
@@ -274,27 +399,88 @@
 
   const pushLog = (type, message) => {
     state.logs.unshift({ time: new Date(), type, msg: message });
-    if (state.logs.length > 30) state.logs.pop();
+    const limit = DEBUG ? 200 : 30;
+    if (state.logs.length > limit) state.logs.length = limit;
     renderGUI();
   };
 
-  const resetRequestCache = () => {
-    etag = "";
+  const debug = (event, details = {}) => {
+    if (!DEBUG) return;
+    let detailText = "";
+    try {
+      detailText = Object.keys(details).length
+        ? ` ${JSON.stringify(details)}`
+        : "";
+    } catch {
+      detailText = " [details serialization failed]";
+    }
+    const message = `[${INSTANCE_ID}] ${event}${detailText}`;
+    console.debug(
+      `[Scriptorium DEBUG ${new Date().toISOString()} ${INSTANCE_ID}]`,
+      event,
+      details
+    );
+    pushLog("debug", message);
   };
 
-  const fetchSnapshot = async (force) => {
-    const endpoint = endpointFor(cfg);
+  const resetRequestCache = () => {
+    debug("etag.reset", { previous: etag, endpoint: etagEndpoint });
+    etag = "";
+    etagEndpoint = "";
+  };
+
+  const fetchProjectList = async () => {
+    const endpoint = projectsEndpointFor(cfg);
+    if (!endpoint) {
+      debug("projects.skip", { reason: "relay-mode" });
+      return;
+    }
+    debug("projects.request", { endpoint });
+    const response = await nativeFetch(endpoint, { method: "GET" });
+    debug("projects.response", { status: response.status, ok: response.ok });
+    if (!response.ok) throw new Error(`프로젝트 목록 HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload?.schema !== SNAPSHOT_SCHEMA || !Array.isArray(payload.projects)) {
+      throw new Error("유효하지 않은 프로젝트 목록입니다");
+    }
+    state.availableProjects = payload.projects.filter(
+      (project) =>
+        project &&
+        typeof project.id === "string" &&
+        typeof project.name === "string" &&
+        (project.mode === "original" || project.mode === "translated")
+    );
+    debug("projects.parsed", {
+      count: state.availableProjects.length,
+      projects: state.availableProjects.map(({ id, name, mode }) => ({ id, name, mode }))
+    });
+  };
+
+  const fetchSnapshot = async (force, projectId = "") => {
+    const endpoint = endpointFor(cfg, projectId);
+    if (etagEndpoint !== endpoint) resetRequestCache();
     const headers = {};
-    if (!force && etag) headers["If-None-Match"] = etag;
+    // RisuAI's nativeFetch bridge cannot deserialize a 304 Response safely.
+    // Relay requests therefore use ordinary 200 responses.
     if (cfg.relayUrl && cfg.relayToken) {
       headers.Authorization = `Bearer ${cfg.relayToken}`;
     }
 
-    const response = await risuai.nativeFetch(endpoint, {
+    debug("snapshot.request", {
+      endpoint,
+      force,
+      conditionalRequest: false
+    });
+
+    const response = await nativeFetch(endpoint, {
       method: "GET",
       headers,
     });
-    if (response.status === 304) return null;
+    debug("snapshot.response", { status: response.status, ok: response.ok });
+    if (response.status === 304) {
+      debug("snapshot.not-modified");
+      return null;
+    }
     if (!response.ok) {
       const hints = {
         401: " (릴레이 토큰을 확인해 주세요)",
@@ -309,34 +495,239 @@
     etag =
       responseHeader(response, "ETag") ||
       (snapshot.hash ? `"${snapshot.hash}"` : "");
+    etagEndpoint = endpoint;
+    debug("snapshot.parsed", {
+      status: snapshot.status,
+      hash: snapshot.hash,
+      projectId: snapshot.project?.id || "",
+      mode: snapshot.mode || ""
+    });
     return snapshot;
   };
 
+  const fetchDocumentSnapshot = async (projectId, force) => {
+    const endpoint = manifestEndpointFor(cfg, projectId);
+    const cached = documentCaches.get(endpoint);
+    const knownRevision = !force ? cached?.revision || "" : "";
+    const requestEndpoint = knownRevision
+      ? `${endpoint}?known=${encodeURIComponent(knownRevision)}`
+      : endpoint;
+    debug("manifest.request", {
+      endpoint: requestEndpoint,
+      projectId,
+      force,
+      cachedRevision: cached?.revision || "",
+      protocol: knownRevision ? "known-revision" : "full-manifest"
+    });
+    const response = await nativeFetch(requestEndpoint, { method: "GET" });
+    debug("manifest.response", { status: response.status, ok: response.ok });
+    if (!response.ok) throw new Error(`문서 목록 HTTP ${response.status}`);
+    const manifest = await response.json();
+    if (
+      manifest?.schema === SNAPSHOT_SCHEMA &&
+      manifest?.status === "not-modified" &&
+      manifest?.project?.id === projectId &&
+      manifest?.revision === cached?.revision
+    ) {
+      debug("manifest.not-modified", {
+        projectId,
+        revision: manifest.revision,
+        transportStatus: response.status
+      });
+      return null;
+    }
+    if (
+      manifest?.schema !== SNAPSHOT_SCHEMA ||
+      manifest?.project?.id !== projectId ||
+      typeof manifest.project.name !== "string" ||
+      (manifest.mode !== "original" && manifest.mode !== "translated") ||
+      typeof manifest.revision !== "string" ||
+      !Array.isArray(manifest.documents)
+    ) {
+      throw new Error("유효하지 않은 문서 목록입니다");
+    }
+
+    const descriptors = manifest.documents.filter(
+      (document) =>
+        document &&
+        typeof document.id === "string" &&
+        typeof document.path === "string" &&
+        typeof document.hash === "string"
+    );
+    if (descriptors.length !== manifest.documents.length) {
+      throw new Error("문서 목록에 잘못된 항목이 있습니다");
+    }
+
+    const nextDocuments = {};
+    const changed = descriptors.filter((descriptor) => {
+      const previous = cached?.documents?.[descriptor.id];
+      if (previous?.hash === descriptor.hash) {
+        nextDocuments[descriptor.id] = previous;
+        return false;
+      }
+      return true;
+    });
+    const deletedIds = Object.keys(cached?.documents || {}).filter(
+      (id) => !descriptors.some((descriptor) => descriptor.id === id)
+    );
+    debug("manifest.diff", {
+      projectId,
+      revision: manifest.revision,
+      total: descriptors.length,
+      changed: changed.map(({ id, path, hash }) => ({ id, path, hash })),
+      deletedIds
+    });
+    const fetched = await Promise.all(
+      changed.map(async (descriptor) => {
+        const documentEndpoint = documentEndpointFor(
+          cfg,
+          projectId,
+          descriptor.id
+        );
+        debug("document.request", {
+          projectId,
+          documentId: descriptor.id,
+          path: descriptor.path,
+          endpoint: documentEndpoint
+        });
+        const documentResponse = await nativeFetch(
+          documentEndpoint,
+          { method: "GET" }
+        );
+        debug("document.response", {
+          projectId,
+          documentId: descriptor.id,
+          path: descriptor.path,
+          status: documentResponse.status,
+          ok: documentResponse.ok
+        });
+        if (!documentResponse.ok) {
+          throw new Error(
+            `문서 요청 HTTP ${documentResponse.status}: ${descriptor.path}`
+          );
+        }
+        const payload = await documentResponse.json();
+        const document = payload?.document;
+        if (
+          payload?.schema !== SNAPSHOT_SCHEMA ||
+          payload?.project?.id !== projectId ||
+          document?.id !== descriptor.id ||
+          document?.hash !== descriptor.hash ||
+          !Array.isArray(document.entries)
+        ) {
+          throw new Error(`유효하지 않은 문서 응답입니다: ${descriptor.path}`);
+        }
+        return document;
+      })
+    );
+    for (const document of fetched) nextDocuments[document.id] = document;
+
+    documentCaches.set(endpoint, {
+      revision: manifest.revision,
+      documents: nextDocuments,
+    });
+    debug("manifest.cache-commit", {
+      projectId,
+      revision: manifest.revision,
+      documentCount: Object.keys(nextDocuments).length
+    });
+    return {
+      schema: SNAPSHOT_SCHEMA,
+      status: "ready",
+      project: manifest.project,
+      mode: manifest.mode,
+      hash: manifest.revision,
+      lorebook: {
+        type: "risu",
+        ver: 1,
+        data: descriptors.flatMap(
+          (descriptor) => nextDocuments[descriptor.id]?.entries || []
+        ),
+      },
+      changedDocuments: changed.length,
+      totalDocuments: descriptors.length,
+    };
+  };
+
   const syncLorebook = async (force = false) => {
-    if (!cfg.enabled || isSyncing) return;
+    debug("sync.invoked", { force, enabled: cfg.enabled, isSyncing });
+    if (!cfg.enabled || isSyncing) {
+      debug("sync.skipped", {
+        force,
+        reason: !cfg.enabled ? "disabled" : "already-running"
+      });
+      return;
+    }
     isSyncing = true;
+    const syncStartedAt = Date.now();
+    state.lastAttemptTime = new Date();
+    renderGUI();
     try {
-      const char = await risuai.getCharacter();
+      debug("character.read.begin");
+      const char = await withTimeout(
+        risuai.getCharacter(),
+        "캐릭터 읽기"
+      );
+      debug("character.read.done", {
+        found: Boolean(char),
+        name: char?.name || char?.charaName || ""
+      });
       if (!char) throw new Error("현재 선택된 캐릭터가 없습니다");
 
       const botName = String(char.name || char.charaName || "").trim();
       if (!botName) throw new Error("현재 캐릭터 이름을 알 수 없습니다");
       if (state.currentBotName && state.currentBotName !== botName) {
         resetRequestCache();
+        state.selectedProjectId = cfg.botProjects[botName]?.id || "";
       }
       state.currentBotName = botName;
 
-      const requestEndpoint = endpointFor(cfg);
-      const snapshot = await fetchSnapshot(force);
-      if (!cfg.enabled || endpointFor(cfg) !== requestEndpoint) return;
+      if (force) await fetchProjectList();
+      const mapping = cfg.botProjects[botName];
+      debug("sync.mapping", {
+        botName,
+        mapping: mapping || null,
+        selectedProjectId: state.selectedProjectId,
+        relay: Boolean(cfg.relayUrl)
+      });
+      if (!state.selectedProjectId) {
+        state.selectedProjectId = mapping?.id || "";
+      }
+
+      const requestedProjectId = mapping?.id || "";
+      if (!mapping && !cfg.relayUrl) {
+        state.connected = true;
+        state.remoteProject = null;
+        state.skipped = true;
+        state.skipReason = `"${botName}"에 연결된 프로젝트가 없습니다`;
+        debug("sync.waiting", { reason: "no-project-mapping", botName });
+        return;
+      }
+      const requestEndpoint = cfg.relayUrl
+        ? endpointFor(cfg)
+        : manifestEndpointFor(cfg, requestedProjectId);
+      const snapshot = cfg.relayUrl
+        ? await fetchSnapshot(force)
+        : await fetchDocumentSnapshot(requestedProjectId, force);
+      const currentEndpoint = cfg.relayUrl
+        ? endpointFor(cfg)
+        : manifestEndpointFor(cfg, requestedProjectId);
+      if (!cfg.enabled || currentEndpoint !== requestEndpoint) return;
       state.connected = true;
+      state.lastCheckTime = new Date();
+      debug("sync.checked", {
+        endpoint: requestEndpoint,
+        changed: snapshot !== null,
+        elapsedMs: Date.now() - syncStartedAt
+      });
       if (snapshot === null) return;
 
       if (snapshot.status === "no-active-project") {
         state.remoteProject = null;
         state.skipped = true;
-        state.skipReason =
-          "Obsidian 활성 문서가 등록된 프로젝트 밖에 있습니다";
+        state.skipReason = requestedProjectId
+          ? "연결된 프로젝트를 Obsidian에서 찾을 수 없습니다"
+          : "Obsidian 활성 문서가 등록된 프로젝트 밖에 있습니다";
         return;
       }
 
@@ -344,7 +735,6 @@
         id: snapshot.project.id,
         name: snapshot.project.name,
       };
-      const mapping = cfg.botProjects[botName];
       if (!mapping) {
         state.skipped = true;
         state.skipReason = `"${botName}"에 연결된 프로젝트가 없습니다`;
@@ -356,7 +746,11 @@
         return;
       }
 
-      let loreEntries = snapshot.lorebook.data.map((entry) => ({ ...entry }));
+      let loreEntries = snapshot.lorebook.data.map((entry) => ({
+        ...entry,
+        key: normalizeActivationKeys(entry.key),
+        secondkey: normalizeActivationKeys(entry.secondkey)
+      }));
       let descriptionSet = false;
       if (cfg.descEntry) {
         const descriptionIndex = loreEntries.findIndex(
@@ -370,7 +764,18 @@
       }
 
       char.globalLore = loreEntries;
-      await risuai.setCharacter(char);
+      debug("character.write.begin", {
+        botName,
+        projectId: snapshot.project.id,
+        mode: snapshot.mode,
+        loreEntryCount: loreEntries.length,
+        descriptionSet
+      });
+      await withTimeout(risuai.setCharacter(char), "캐릭터 저장");
+      debug("character.write.done", {
+        botName,
+        elapsedMs: Date.now() - syncStartedAt
+      });
 
       state.skipped = false;
       state.skipReason = "";
@@ -383,32 +788,66 @@
         : "";
       pushLog(
         "ok",
-        `${loreEntries.length}개 | ${snapshot.mode} | ${snapshot.project.name}${descriptionNote}`
+        `${loreEntries.length}개 | ${snapshot.mode} | ${snapshot.project.name}${
+          snapshot.changedDocuments === undefined
+            ? ""
+            : ` | 변경 문서 ${snapshot.changedDocuments}/${snapshot.totalDocuments}`
+        }${descriptionNote}`
       );
     } catch (error) {
       state.connected = false;
+      debug("sync.error", {
+        force,
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - syncStartedAt
+      });
       pushLog(
         "err",
         error instanceof Error ? error.message : String(error)
       );
     } finally {
       isSyncing = false;
+      debug("sync.finally", {
+        force,
+        elapsedMs: Date.now() - syncStartedAt,
+        nextTickExpectedMs: cfg.pollMs
+      });
       renderGUI();
     }
   };
 
   const stopPolling = () => {
+    debug("poll.stop", { timerId: timerId === null ? null : String(timerId) });
     if (timerId) clearInterval(timerId);
     timerId = null;
   };
 
   const startPolling = () => {
+    debug("poll.start.requested", {
+      enabled: cfg.enabled,
+      pollMs: cfg.pollMs,
+      existingTimerId: timerId === null ? null : String(timerId)
+    });
     stopPolling();
-    if (!cfg.enabled) return;
+    if (!cfg.enabled) {
+      debug("poll.start.skipped", { reason: "disabled" });
+      return;
+    }
     void syncLorebook(true);
     timerId = setInterval(() => {
+      pollTick += 1;
+      debug("poll.tick", {
+        tick: pollTick,
+        timerId: timerId === null ? null : String(timerId),
+        pollMs: cfg.pollMs,
+        isSyncing
+      });
       void syncLorebook(false);
     }, cfg.pollMs);
+    debug("poll.started", {
+      timerId: String(timerId),
+      pollMs: cfg.pollMs
+    });
   };
 
   const persistMappings = async () => {
@@ -508,6 +947,7 @@
       .log-m { min-width: 0; overflow-wrap: anywhere; color: #778; }
       .log-m.ok { color: #69c993; }
       .log-m.err { color: #e27785; }
+      .log-m.debug { color: #7eb6ff; }
       .log-empty, .map-empty { padding: 7px 0; color: #445; text-align: center; }
       .bot-bar { margin-bottom: 8px; }
       .bot-bar-lbl { color: #556; font-size: 11px; }
@@ -520,6 +960,12 @@
       .project-now strong {
         overflow: hidden; color: #b7bed2; text-overflow: ellipsis; white-space: nowrap;
       }
+      .project-picker { display: flex; gap: 8px; margin-bottom: 8px; }
+      .project-picker select {
+        min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid #1e2d4a;
+        border-radius: 7px; outline: none; background: #0d1320; color: #dde;
+      }
+      .project-picker .btn { flex: none; padding-inline: 12px; }
       .map-list { margin-top: 8px; }
       .map-item { gap: 7px; padding: 6px 3px; border-bottom: 1px solid #1b2235; font-size: 11px; }
       .map-bot, .map-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -567,9 +1013,11 @@
         </div>
 
         <div class="sec">
-          <div class="sec-label">마지막 동기화</div>
+          <div class="sec-label">폴링 상태</div>
           <div class="info-grid">
-            <div class="card"><div class="card-lbl">시각</div><div class="card-val" id="infoTime">—</div></div>
+            <div class="card"><div class="card-lbl">마지막 시도</div><div class="card-val" id="infoAttempt">—</div></div>
+            <div class="card"><div class="card-lbl">마지막 확인</div><div class="card-val" id="infoCheck">—</div></div>
+            <div class="card"><div class="card-lbl">마지막 반영</div><div class="card-val" id="infoTime">—</div></div>
             <div class="card"><div class="card-lbl">항목 수</div><div class="card-val" id="infoCount">—</div></div>
             <div class="card"><div class="card-lbl">모드</div><div class="card-val" id="infoMode">—</div></div>
             <div class="card"><div class="card-lbl">프로젝트</div><div class="card-val" id="infoProject">—</div></div>
@@ -584,11 +1032,15 @@
             <span class="sync-badge" id="botProjectLabel">연결 없음</span>
           </div>
           <div class="project-now">
-            <span>Obsidian 현재 프로젝트</span>
+            <span>서버 스냅샷 프로젝트</span>
             <strong id="remoteProject">감지되지 않음</strong>
           </div>
+          <div class="project-picker">
+            <select id="projectSelect" aria-label="연결할 프로젝트"></select>
+            <button class="btn btn-ghost" id="btnRefreshProjects">새로고침</button>
+          </div>
           <div class="btn-row">
-            <button class="btn btn-sync" id="btnMap">현재 프로젝트 연결</button>
+            <button class="btn btn-sync" id="btnMap">선택 프로젝트 연결</button>
             <button class="btn btn-ghost" id="btnUnmap">연결 해제</button>
           </div>
           <div class="map-list" id="mapList"></div>
@@ -641,6 +1093,8 @@
       dot: document.getElementById("dot"),
       statusTxt: document.getElementById("statusTxt"),
       pollBadge: document.getElementById("pollBadge"),
+      infoAttempt: document.getElementById("infoAttempt"),
+      infoCheck: document.getElementById("infoCheck"),
       infoTime: document.getElementById("infoTime"),
       infoCount: document.getElementById("infoCount"),
       infoMode: document.getElementById("infoMode"),
@@ -648,6 +1102,7 @@
       botName: document.getElementById("botName"),
       botProjectLabel: document.getElementById("botProjectLabel"),
       remoteProject: document.getElementById("remoteProject"),
+      projectSelect: document.getElementById("projectSelect"),
       mapList: document.getElementById("mapList"),
       logBox: document.getElementById("logBox"),
       btnToggle: document.getElementById("btnToggle"),
@@ -662,7 +1117,10 @@
       cfgRelayToken: document.getElementById("cfgRelayToken"),
     };
 
-    const close = () => risuai.hideContainer();
+    const close = () => {
+      debug("ui.close");
+      return risuai.hideContainer();
+    };
     document.getElementById("btnClose").addEventListener("click", close);
     document.getElementById("btnClose2").addEventListener("click", close);
 
@@ -680,17 +1138,46 @@
     });
 
     document.getElementById("btnSync").addEventListener("click", () => {
+      debug("ui.sync-now");
       resetRequestCache();
       void syncLorebook(true);
     });
 
+    els.projectSelect.addEventListener("change", () => {
+      state.selectedProjectId = els.projectSelect.value;
+      debug("ui.project-selected", { projectId: state.selectedProjectId });
+      renderGUI();
+    });
+
+    document
+      .getElementById("btnRefreshProjects")
+      .addEventListener("click", async () => {
+        try {
+          await fetchProjectList();
+          pushLog("ok", `${state.availableProjects.length}개 프로젝트를 불러왔습니다`);
+        } catch (error) {
+          pushLog("err", error instanceof Error ? error.message : String(error));
+        }
+        renderGUI();
+      });
+
     els.btnMap.addEventListener("click", async () => {
-      if (!state.currentBotName || !state.remoteProject) return;
-      cfg.botProjects[state.currentBotName] = { ...state.remoteProject };
+      if (!state.currentBotName || !state.selectedProjectId) return;
+      const project = state.availableProjects.find(
+        (entry) => entry.id === state.selectedProjectId
+      ) ||
+        (state.remoteProject?.id === state.selectedProjectId
+          ? state.remoteProject
+          : null);
+      if (!project) return;
+      cfg.botProjects[state.currentBotName] = {
+        id: project.id,
+        name: project.name,
+      };
       await persistMappings();
       pushLog(
         "ok",
-        `"${state.currentBotName}" → "${state.remoteProject.name}" 연결됨`
+        `"${state.currentBotName}" → "${project.name}" 연결됨`
       );
       resetRequestCache();
       renderGUI();
@@ -785,6 +1272,7 @@
       if (previousEndpoint !== nextEndpoint) resetRequestCache();
 
       buildGUI();
+      debug("ui.open", { previousEndpoint, nextEndpoint });
       syncCfgInputs();
       renderGUI();
       startPolling();
@@ -792,9 +1280,17 @@
     }
   );
 
+  debug("plugin.initialized", {
+    instanceId: INSTANCE_ID,
+    enabled: cfg.enabled,
+    pollMs: cfg.pollMs,
+    relay: Boolean(cfg.relayUrl),
+    mappingCount: Object.keys(cfg.botProjects).length
+  });
   startPolling();
 
   await risuai.onUnload(() => {
+    debug("plugin.unload");
     stopPolling();
   });
 })();

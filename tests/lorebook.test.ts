@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  compileLorebookDocumentUnits,
   compileLorebookDocuments,
   createNoProjectSnapshot,
   createReadySnapshot,
@@ -109,6 +110,39 @@ describe("Risu compiler", () => {
       }).data
     ).toEqual(lorebook.data);
   });
+
+  it("splits the same lorebook into independently hashed document units", () => {
+    const hero = {
+      ...document("Hero", "영웅"),
+      path: "project/people/hero.md"
+    };
+    const villain = {
+      ...document("Villain", "악당"),
+      path: "project/people/villain.md",
+      basename: "villain"
+    };
+    const options = {
+      projectRoot: "project",
+      includeFolderEntries: true
+    };
+    const before = compileLorebookDocumentUnits(
+      [hero, villain],
+      "original",
+      options
+    );
+    const after = compileLorebookDocumentUnits(
+      [{ ...hero, source: parseMarkdown("Changed hero") }, villain],
+      "original",
+      options
+    );
+
+    expect(before.flatMap((unit) => unit.entries)).toEqual(
+      compileLorebookDocuments([hero, villain], "original", options).data
+    );
+    expect(after[0]?.hash).toBe(before[0]?.hash);
+    expect(after[1]?.hash).not.toBe(before[1]?.hash);
+    expect(after[2]?.hash).toBe(before[2]?.hash);
+  });
 });
 
 describe("snapshot HTTP contract", () => {
@@ -134,6 +168,22 @@ describe("snapshot HTTP contract", () => {
     expect(fresh.headers.ETag).toBe(`"${snapshot.hash}"`);
     expect(snapshotHttpResponse(snapshot, `"${snapshot.hash}"`).status).toBe(
       304
+    );
+  });
+
+  it("changes the snapshot hash when switching original and translated mode", () => {
+    if (snapshot.status !== "ready") throw new Error("expected ready snapshot");
+    const translated = createReadySnapshot(
+      { ...project, syncMode: "translated" },
+      snapshot.lorebook
+    );
+    if (translated.status !== "ready") {
+      throw new Error("expected translated ready snapshot");
+    }
+    expect(translated.mode).toBe("translated");
+    expect(translated.hash).not.toBe(snapshot.hash);
+    expect(snapshotHttpResponse(translated, `"${snapshot.hash}"`).status).toBe(
+      200
     );
   });
 

@@ -231,6 +231,21 @@ export interface RisuLorebook {
   data: RisuEntry[];
 }
 
+export interface LorebookDocumentUnit {
+  id: string;
+  path: string;
+  hash: string;
+  entries: RisuEntry[];
+}
+
+export interface LorebookDocumentProject {
+  schema: typeof SNAPSHOT_SCHEMA;
+  project: { id: string; name: string };
+  mode: SyncMode;
+  revision: string;
+  documents: LorebookDocumentUnit[];
+}
+
 export type LorebookSnapshot =
   | {
       schema: typeof SNAPSHOT_SCHEMA;
