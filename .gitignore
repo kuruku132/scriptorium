@@ -2,5 +2,6 @@ node_modules/
 dist/
 coverage/
 deploy.local.json
+relay/store.json
 *.log
 .DS_Store
