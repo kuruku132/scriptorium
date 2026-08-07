@@ -656,6 +656,11 @@
   flex: 1;
 }
 
+.scriptorium-cbs-var-check {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
 .scriptorium-cbs-toggle {
   display: flex;
   align-items: center;

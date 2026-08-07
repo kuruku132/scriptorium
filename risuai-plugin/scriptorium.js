@@ -1,7 +1,7 @@
 //@name scriptoriumsync
 //@display-name 스크립토리움
 //@api 3.0
-//@version 2.0.0
+//@version 2.1.0
 //@update-url https://raw.githubusercontent.com/kuruku132/scriptorium/main/risuai-plugin/scriptorium.js
 //@arg host string 로컬 서버 호스트 (기본값: 127.0.0.1)
 //@arg port int 로컬 서버 포트 (기본값: 27124)

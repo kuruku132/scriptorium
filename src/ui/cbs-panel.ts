@@ -321,6 +321,14 @@ export class CbsPanelView extends ItemView {
   ): void {
     const row = parent.createDiv({ cls: "scriptorium-cbs-var-row" });
     row.createEl("code", { text: name, cls: "scriptorium-cbs-var-name" });
+    // 0/1 대응 체크박스 — 입력창이 항상 우선(실제 값은 입력창에 있음).
+    // 체크 → 입력창에 "1", 해제 → "0". 입력창에 "1"을 넣으면 체크, 그 외엔 해제.
+    const check = row.createEl("input", {
+      type: "checkbox",
+      cls: "scriptorium-cbs-var-check"
+    });
+    check.checked = value === "1";
+    check.title = "1/0 토글";
     const input = row.createEl("input", {
       type: "text",
       value,
@@ -328,7 +336,21 @@ export class CbsPanelView extends ItemView {
     });
     input.dataset.varName = name;
     input.dataset.varKind = "chat";
+    // 체크박스 조작 → 입력창 값을 1/0으로 맞춤(입력창이 실제 값).
+    check.addEventListener("change", () => {
+      input.value = check.checked ? "1" : "0";
+      this.focusedDescriptor = {
+        name,
+        kind: "chat",
+        selStart: input.value.length,
+        selEnd: input.value.length
+      };
+      this.host.setCbsChatVar(path, name, input.value);
+      this.refreshPreviewOnly(path);
+    });
+    // 입력 조작 → 체크박스는 입력값을 따라감(입력창 우선).
     input.addEventListener("input", () => {
+      check.checked = input.value === "1";
       this.focusedDescriptor = {
         name,
         kind: "chat",
