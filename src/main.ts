@@ -1,5 +1,6 @@
 import {
   FuzzySuggestModal,
+  MarkdownView,
   Notice,
   Plugin,
   TAbstractFile,
@@ -60,6 +61,8 @@ import {
   emptyProjectCache,
   type CachedBlock,
   type ChangeGroup,
+  type CbsMockMeta,
+  type CbsTestValues,
   type FileCache,
   type FileChangePlan,
   type LorebookDocumentProject,
@@ -77,6 +80,16 @@ import {
   ScriptoriumDashboard,
   type DashboardHost
 } from "./ui/dashboard";
+import {
+  CBS_PANEL_VIEW_TYPE,
+  CbsPanelView,
+  type CbsPanelHost
+} from "./ui/cbs-panel";
+import {
+  CBS_PREVIEW_VIEW_TYPE,
+  CbsPreviewView
+} from "./ui/cbs-preview";
+import { CbsSnippetModal } from "./ui/snippet-modal";
 import {
   ScriptoriumSettingTab,
   type SettingsHost
@@ -147,7 +160,7 @@ const EMPTY_PROGRESS: TranslationProgress = {
 
 export default class ScriptoriumPlugin
   extends Plugin
-  implements DashboardHost, SettingsHost
+  implements DashboardHost, SettingsHost, CbsPanelHost
 {
   settings: ScriptoriumSettings = structuredClone(DEFAULT_SETTINGS);
   private data: RuntimeData = {
@@ -163,6 +176,7 @@ export default class ScriptoriumPlugin
   private scanAgain = false;
   private renameGuard = false;
   private suppressVaultScan = 0;
+  private cbsWatchedFile: TFile | null = null;
   private localServer!: LocalSnapshotServer;
   private documentProjects = new Map<
     string,
@@ -225,8 +239,19 @@ export default class ScriptoriumPlugin
       DASHBOARD_VIEW_TYPE,
       (leaf) => new ScriptoriumDashboard(leaf, this)
     );
+    this.registerView(
+      CBS_PANEL_VIEW_TYPE,
+      (leaf) => new CbsPanelView(leaf, this)
+    );
+    this.registerView(
+      CBS_PREVIEW_VIEW_TYPE,
+      (leaf) => new CbsPreviewView(leaf, this)
+    );
     this.addRibbonIcon("book-open-text", "Scriptorium 대시보드", () => {
       void this.openDashboard();
+    });
+    this.addRibbonIcon("flask-conical", "Scriptorium CBS 테스트", () => {
+      void this.openCbsPanel();
     });
     this.addSettingTab(new ScriptoriumSettingTab(this.app, this));
     this.registerCommands();
@@ -281,6 +306,23 @@ export default class ScriptoriumPlugin
       id: "run-legacy-migration",
       name: "레거시 데이터 마이그레이션 실행",
       callback: () => void this.runLegacyMigration()
+    });
+    this.addCommand({
+      id: "open-cbs-panel",
+      name: "CBS 테스트 패널 열기",
+      callback: () => void this.openCbsPanel()
+    });
+    this.addCommand({
+      id: "open-cbs-preview",
+      name: "CBS 프리뷰 분할 열기",
+      callback: () => void this.openCbsPreview()
+    });
+    this.addCommand({
+      id: "insert-cbs-snippet",
+      name: "CBS 스니펫 삽입",
+      editorCallback: () => {
+        new CbsSnippetModal(this.app).open();
+      }
     });
   }
 
@@ -403,6 +445,12 @@ export default class ScriptoriumPlugin
       cached.sourcePath = file.path;
       cached.translationPath = translationPathFor(project, file.path);
       cache.files[file.path] = cached;
+    }
+    // CBS 테스트 값도 파일 경로 키를 새 경로로 이동.
+    const cbsValues = this.settings.cbsTestValues[oldPath];
+    if (cbsValues) {
+      delete this.settings.cbsTestValues[oldPath];
+      this.settings.cbsTestValues[file.path] = cbsValues;
     }
     if (findProjectForPath([project], file.path)) {
       const oldTranslation = translationPathFor(project, oldPath);
@@ -628,6 +676,145 @@ export default class ScriptoriumPlugin
       const view = leaf.view;
       if (view instanceof ScriptoriumDashboard) void view.refresh();
     }
+  }
+
+  async openCbsPanel(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(CBS_PANEL_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+      await leaf?.setViewState({
+        type: CBS_PANEL_VIEW_TYPE,
+        active: true
+      });
+    }
+    if (leaf) this.app.workspace.revealLeaf(leaf);
+  }
+
+  private refreshCbsPanel(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(
+      CBS_PANEL_VIEW_TYPE
+    )) {
+      const view = leaf.view;
+      if (view instanceof CbsPanelView) view.refresh();
+    }
+  }
+
+  async openCbsPreview(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(
+      CBS_PREVIEW_VIEW_TYPE
+    )[0];
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
+      return;
+    }
+    // 활성 MarkdownView 옆에 세로 분할로 프리뷰를 띄운다(에디터 포커스 유지).
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const mdView =
+      activeView ??
+      (this.cbsWatchedFile
+        ? this.findOpenMarkdownView(this.cbsWatchedFile.path)
+        : null);
+    let leaf: WorkspaceLeaf | null = null;
+    if (mdView) {
+      leaf = this.app.workspace.createLeafBySplit(mdView.leaf, "vertical");
+    } else {
+      leaf = this.app.workspace.getRightLeaf(false);
+    }
+    if (leaf) {
+      await leaf.setViewState({
+        type: CBS_PREVIEW_VIEW_TYPE,
+        active: false
+      });
+      this.refreshCbsPreview();
+    }
+  }
+
+  private refreshCbsPreview(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(
+      CBS_PREVIEW_VIEW_TYPE
+    )) {
+      const view = leaf.view;
+      if (view instanceof CbsPreviewView) view.refresh();
+    }
+  }
+
+  private findOpenMarkdownView(path: string): MarkdownView | null {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === path) {
+        return view;
+      }
+    }
+    return null;
+  }
+
+  // === CbsPanelHost 구현 =====================================================
+
+  getActiveEditorText(): string | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (view) {
+      if (view.file) this.cbsWatchedFile = view.file;
+      return view.editor.getValue();
+    }
+    // 패널/프리뷰/대시보드가 포커스를 가질 때도 추적 중인 MarkdownView의
+    // 에디터 원문을 그대로 제공 — 패널 클릭으로 포커스가 풀려도 컨트롤 유지.
+    const watched = this.cbsWatchedFile;
+    if (!watched) return null;
+    const watchedView = this.findOpenMarkdownView(watched.path);
+    return watchedView ? watchedView.editor.getValue() : null;
+  }
+
+  getActiveFilePath(): string | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (view?.file) {
+      this.cbsWatchedFile = view.file;
+      return view.file.path;
+    }
+    return this.cbsWatchedFile?.path ?? null;
+  }
+
+  getCbsTestValues(path: string): CbsTestValues {
+    const existing = this.settings.cbsTestValues[path];
+    if (existing) return existing;
+    return { chatVars: {}, toggles: {} };
+  }
+
+  getCbsMockMeta(): CbsMockMeta {
+    return this.settings.cbsMockMeta;
+  }
+
+  setCbsChatVar(path: string, name: string, value: string): void {
+    const entry = this.ensureCbsTestValues(path);
+    entry.chatVars[name] = value;
+    void this.saveSettings();
+    this.refreshCbsPreview();
+  }
+
+  setCbsToggle(path: string, name: string, value: boolean): void {
+    const entry = this.ensureCbsTestValues(path);
+    entry.toggles[name] = value;
+    void this.saveSettings();
+    this.refreshCbsPreview();
+  }
+
+  resetCbsTestValues(path: string): void {
+    delete this.settings.cbsTestValues[path];
+    void this.saveSettings();
+    this.refreshCbsPreview();
+    this.refreshCbsPanel();
+  }
+
+  saveCbsSettings(): void {
+    void this.saveSettings();
+  }
+
+  private ensureCbsTestValues(path: string): CbsTestValues {
+    let entry = this.settings.cbsTestValues[path];
+    if (!entry) {
+      entry = { chatVars: {}, toggles: {} };
+      this.settings.cbsTestValues[path] = entry;
+    }
+    return entry;
   }
 
   getActiveProject(): ProjectConfig | null {

@@ -114,7 +114,7 @@ describe("v1 migration", () => {
       },
       null
     );
-    expect(migrated.settings.version).toBe(3);
+    expect(migrated.settings.version).toBe(4);
     expect(migrated.settings.projects[0]).toMatchObject({
       id: "project-alpha",
       name: "Alpha",
