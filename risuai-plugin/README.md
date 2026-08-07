@@ -13,14 +13,22 @@
 
 ## 릴레이 연결
 
-Obsidian과 RisuAI 양쪽에 같은 Worker URL, 채널, 토큰을 설정합니다. RisuAI
-플러그인에서 Worker URL을 입력하면 로컬 서버 대신 다음 주소를 폴링합니다.
+로컬 릴레이(`relay/relay.mjs`)를 먼저 실행합니다.
 
-```text
-{workerUrl}/v1/channels/{channel}/snapshot
+```sh
+node relay/relay.mjs
 ```
 
-토큰을 쓰는 Worker라면 양쪽에 같은 Bearer 토큰을 입력해야 합니다.
+기본 주소는 `http://127.0.0.1:27125`입니다. Obsidian과 RisuAI 양쪽에 같은
+릴레이 주소, 채널, 토큰을 설정합니다. RisuAI 플러그인에서 릴레이 주소를
+입력하면 로컬 서버 대신 다음 주소를 폴링합니다.
+
+```text
+{relayUrl}/v1/channels/{channel}/snapshot
+```
+
+릴레이를 `RELAY_TOKEN`으로 실행했다면 양쪽에 같은 Bearer 토큰을 입력해야
+합니다.
 
 ## 동작
 

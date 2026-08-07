@@ -13,6 +13,7 @@ const context = await esbuild.context({
   platform: "node",
   target: "es2022",
   outfile: "dist/main.js",
+  minify: !watch,
   sourcemap: watch ? "inline" : false,
   logLevel: "info"
 });

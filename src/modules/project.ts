@@ -15,6 +15,8 @@ import {
   DATA_VERSION,
   DEFAULT_SETTINGS,
   emptyProjectCache,
+  type CbsMockMeta,
+  type CbsTestValues,
   type ProjectCache,
   type ProjectConfig,
   type RuntimeData,
@@ -348,6 +350,14 @@ function normalizeModernSettings(raw: unknown): ScriptoriumSettings {
   const localServer = record(value.localServer);
   const relay = record(value.relay);
   const advanced = record(value.advanced);
+  const cbsMockMetaRaw = record(value.cbsMockMeta);
+  const mockMeta: CbsMockMeta = {
+    char: typeof cbsMockMetaRaw.char === "string" ? cbsMockMetaRaw.char : DEFAULT_SETTINGS.cbsMockMeta.char,
+    user: typeof cbsMockMetaRaw.user === "string" ? cbsMockMetaRaw.user : DEFAULT_SETTINGS.cbsMockMeta.user,
+    persona: typeof cbsMockMetaRaw.persona === "string" ? cbsMockMetaRaw.persona : DEFAULT_SETTINGS.cbsMockMeta.persona,
+    model: typeof cbsMockMetaRaw.model === "string" ? cbsMockMetaRaw.model : DEFAULT_SETTINGS.cbsMockMeta.model,
+    maxcontext: positiveInteger(cbsMockMetaRaw.maxcontext, DEFAULT_SETTINGS.cbsMockMeta.maxcontext)
+  };
   return {
     version: DATA_VERSION,
     projects: Array.isArray(value.projects)
@@ -440,8 +450,31 @@ function normalizeModernSettings(raw: unknown): ScriptoriumSettings {
     },
     migrationWarnings: Array.isArray(value.migrationWarnings)
       ? value.migrationWarnings.map(String)
-      : []
+      : [],
+    cbsTestValues: normalizeCbsTestValues(value.cbsTestValues),
+    cbsMockMeta: mockMeta
   };
+}
+
+// CBS 테스트 값 코어션: 경로별 {chatVars, toggles} 를 안전 타입으로 변환.
+function normalizeCbsTestValues(raw: unknown): Record<string, CbsTestValues> {
+  const value = record(raw);
+  const out: Record<string, CbsTestValues> = {};
+  for (const key of Object.keys(value)) {
+    const entry = record(value[key]);
+    const chatVarsRaw = record(entry.chatVars);
+    const togglesRaw = record(entry.toggles);
+    const chatVars: Record<string, string> = {};
+    for (const k of Object.keys(chatVarsRaw)) {
+      chatVars[k] = String(chatVarsRaw[k] ?? "");
+    }
+    const toggles: Record<string, boolean> = {};
+    for (const k of Object.keys(togglesRaw)) {
+      toggles[k] = togglesRaw[k] === true;
+    }
+    out[key] = { chatVars, toggles };
+  }
+  return out;
 }
 
 export async function migrateRuntimeData(
@@ -463,6 +496,15 @@ export async function migrateRuntimeData(
     return {
       settings: normalizeModernSettings(rawRecord),
       caches: {}
+    };
+  }
+
+  // v3 → v4: 순수 스키마 확장(cbsTestValues/cbsMockMeta 추가). 캐시 보존.
+  if (wrappedVersion === 3 || directVersion === 3) {
+    const source = wrappedVersion === 3 ? wrappedSettings : rawRecord;
+    return {
+      settings: normalizeModernSettings(source),
+      caches: wrappedVersion === 3 ? normalizeCaches(rawRecord.caches) : {}
     };
   }
 
