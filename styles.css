@@ -522,3 +522,219 @@
   padding: 10px 0;
   font-weight: var(--font-semibold);
 }
+
+/* === CBS 스니펫 모달 === */
+.scriptorium-cbs-modal {
+  max-width: 640px;
+}
+
+.scriptorium-cbs-modal-note {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: 0 0 8px;
+}
+
+.scriptorium-cbs-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.scriptorium-cbs-list {
+  max-height: 60vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 6px;
+}
+
+.scriptorium-cbs-list > details {
+  margin: 4px 0;
+}
+
+.scriptorium-cbs-list > details > summary {
+  cursor: pointer;
+  padding: 4px 0;
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.scriptorium-cbs-group,
+.scriptorium-cbs-list > .scriptorium-cbs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.scriptorium-cbs-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  cursor: pointer;
+}
+
+.scriptorium-cbs-item:hover {
+  border-color: var(--background-modifier-border);
+  background: var(--background-modifier-hover);
+}
+
+.scriptorium-cbs-item-label {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.scriptorium-cbs-item-desc {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.scriptorium-cbs-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 6px 0;
+}
+
+/* === CBS 테스트 패널 === */
+.scriptorium-cbs-panel {
+  padding: 10px 12px;
+}
+
+.scriptorium-cbs-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.scriptorium-cbs-path {
+  flex: 1;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.scriptorium-cbs-limit {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-warning, var(--text-muted));
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+
+.scriptorium-cbs-vars {
+  margin: 6px 0;
+}
+
+.scriptorium-cbs-vars h4 {
+  margin: 10px 0 4px;
+  font-size: var(--font-ui-small);
+}
+
+.scriptorium-cbs-var-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.scriptorium-cbs-var-name {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  min-width: 90px;
+}
+
+.scriptorium-cbs-var-row input[type="text"] {
+  flex: 1;
+}
+
+.scriptorium-cbs-var-check {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.scriptorium-cbs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.scriptorium-cbs-reset {
+  margin: 8px 0;
+}
+
+.scriptorium-cbs-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.scriptorium-cbs-errors {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-error-border, var(--background-modifier-border));
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-error, var(--background-secondary));
+}
+
+.scriptorium-cbs-errors h5 {
+  margin: 0 0 4px;
+  font-size: var(--font-ui-smaller);
+}
+
+.scriptorium-cbs-error-line {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error, var(--text-muted));
+  font-family: var(--font-monospace);
+}
+
+.scriptorium-cbs-preview-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.scriptorium-cbs-preview-view .scriptorium-cbs-header {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 10px 12px 0;
+}
+
+.scriptorium-cbs-preview-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: var(--size-4-4);
+  font-size: var(--font-text-size);
+}
+
+.scriptorium-cbs-preview-body .scriptorium-cbs-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.scriptorium-cbs-preview-body .scriptorium-cbs-errors {
+  margin-top: var(--size-4-4);
+  padding: var(--size-4-2) var(--size-4-3);
+  border: 1px solid var(--background-modifier-error-border, var(--background-modifier-border));
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-error, var(--background-modifier-hover));
+}

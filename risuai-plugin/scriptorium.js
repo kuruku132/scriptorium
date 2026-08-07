@@ -1,7 +1,7 @@
 //@name scriptoriumsync
 //@display-name 스크립토리움
 //@api 3.0
-//@version 2.0.0
+//@version 2.1.0
 //@update-url https://raw.githubusercontent.com/kuruku132/scriptorium/main/risuai-plugin/scriptorium.js
 //@arg host string 로컬 서버 호스트 (기본값: 127.0.0.1)
 //@arg port int 로컬 서버 포트 (기본값: 27124)
@@ -9,7 +9,7 @@
 //@arg desc_entry string description으로 넣을 로어북 항목 이름 (비워두면 비활성화)
 //@arg bot_projects string 봇-프로젝트 JSON 매핑 (GUI로 관리)
 //@arg enabled string 동기화 활성화 (true/false, 기본값: true)
-//@arg relay_url string 릴레이 Worker URL (설정 시 로컬 서버 대신 사용)
+//@arg relay_url string 릴레이 주소 (설정 시 로컬 서버 대신 사용)
 //@arg relay_channel string 릴레이 채널
 //@arg relay_token string 릴레이 인증 토큰
 
@@ -1055,8 +1055,8 @@
           <div class="sec-label">설정</div>
           <div class="cfg-full">
             <div class="field">
-              <label>릴레이 Worker URL (비워두면 로컬 서버)</label>
-              <input id="cfgRelayUrl" type="text" placeholder="https://example.workers.dev" />
+              <label>릴레이 주소 (비워두면 로컬 서버)</label>
+              <input id="cfgRelayUrl" type="text" placeholder="http://127.0.0.1:27125" />
             </div>
           </div>
           <div class="cfg-grid" style="grid-template-columns: 1fr 1fr;">

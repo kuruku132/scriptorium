@@ -19,6 +19,18 @@ export class TFolder extends TAbstractFile {}
 
 export class FileSystemAdapter {}
 
+export class Notice {
+  constructor(_message: string) {}
+}
+
+export const Platform = {
+  isDesktopApp: true
+};
+
+export async function requestUrl(): Promise<never> {
+  throw new Error("requestUrl is not implemented in the test stub");
+}
+
 export function normalizePath(path: string): string {
   return path.replaceAll("\\", "/").replace(/\/{2,}/g, "/");
 }
