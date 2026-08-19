@@ -47,9 +47,10 @@ function lcsExact(
 ): Array<[number, number]> {
   const rows = oldBlocks.length + 1;
   const columns = newBlocks.length + 1;
-  const table = Array.from({ length: rows }, () =>
-    Array<number>(columns).fill(0)
-  );
+  // Uint32Array를 사용해 DP 테이블의 셀당 메모리를 일반 Number 배열 대비 절반 이하로
+  // 줄인다. 대형 문서에서 oldBlocks × newBlocks 크기의 할당이 메모리 위험을
+  // 일으키는 것을 완화하며, 기존 블록 매칭 결과/동작은 동일하게 유지된다.
+  const table = Array.from({ length: rows }, () => new Uint32Array(columns));
 
   for (let oldIndex = oldBlocks.length - 1; oldIndex >= 0; oldIndex -= 1) {
     for (let newIndex = newBlocks.length - 1; newIndex >= 0; newIndex -= 1) {
@@ -419,7 +420,11 @@ export function createTranslationBatches(
       (change) =>
         change.state !== "conflict" &&
         change.kind !== "move" &&
-        change.selected
+        change.selected &&
+        // 삭제 변경은 번역할 새 블록이 없고 applyLocalChanges가 이미
+        // 로컬에 반영하므로 API 요청으로 보내지 않는다. 메타데이터 변경은
+        // newBlocks가 비어 있어도 keys 번역을 위해 배치해야 한다.
+        (change.kind === "metadata" || change.newBlocks.length > 0)
     );
     let active: TranslationBatch | null = null;
     let activeCharacters = 0;

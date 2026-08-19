@@ -1,5 +1,6 @@
 import {
   extractKeys,
+  normalizeKeys,
   renderMarkdown,
   stableHash
 } from "../../shared/markdown";
@@ -105,11 +106,13 @@ export function createInitialFileCache(
   const sameShape =
     translation !== null && sourceBlocks.length === translationBlocks.length;
   const rawTranslatedKeys = translation?.frontmatter?.values.keys;
-  const translatedKeys = Array.isArray(rawTranslatedKeys)
-    ? rawTranslatedKeys.map(String)
-    : typeof rawTranslatedKeys === "string"
-      ? rawTranslatedKeys.split(",").map((key) => key.trim()).filter(Boolean)
-      : [];
+  const translatedKeys = normalizeKeys(
+    Array.isArray(rawTranslatedKeys)
+      ? rawTranslatedKeys.map(String)
+      : typeof rawTranslatedKeys === "string"
+        ? rawTranslatedKeys.split(",").map((key) => key.trim()).filter(Boolean)
+        : []
+  );
   const blocks: CachedBlock[] = sameShape
     ? sourceBlocks.map((block, index) => ({
         id: block.id,

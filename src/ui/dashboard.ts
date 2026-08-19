@@ -133,6 +133,87 @@ function compactText(value: string, limit = 52): string {
     : compact;
 }
 
+/**
+ * 스트리밍 원문(JSON 형식의 번역 응답)을 읽기 좋은 미리보기로 변환한다.
+ * 응답은 {"blocks":[{"id":..,"text":..}], "keys":[..]} 형태이며,
+ * 스트리밍 도중에는 닫히지 않은 불완전 JSON이 들어올 수 있어
+ * 완전 파싱이 실패하면 정규식으로 text 값을 추출해 보여준다.
+ */
+function formatStreamPreview(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  if (!cleaned) return "";
+
+  const fromParsed = parseStreamBlocks(cleaned);
+  if (fromParsed) return fromParsed;
+
+  // 불완전 JSON: "text":"..." 값을 스트리밍 도중 추출
+  const texts: string[] = [];
+  const textRe = /"text"\s*:\s*"((?:[^"\\]|\\.)*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = textRe.exec(cleaned)) !== null) {
+    const text = unescapeJsonString(match[1] ?? "");
+    if (text) texts.push(text);
+  }
+  const keysMatch = cleaned.match(/"keys"\s*:\s*\[([\s\S]*?)\]/);
+  if (keysMatch && keysMatch[1]) {
+    const keys = keysMatch[1]
+      .match(/"((?:[^"\\]|\\.)*)"/g)
+      ?.map((k) => unescapeJsonString(k.slice(1, -1)))
+      .filter(Boolean);
+    if (keys && keys.length > 0) {
+      texts.push(`keys · ${keys.join(", ")}`);
+    }
+  }
+  return texts.join("\n\n") || cleaned;
+}
+
+function parseStreamBlocks(cleaned: string): string | null {
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const value = JSON.parse(cleaned.slice(start, end + 1)) as {
+      blocks?: unknown;
+      keys?: unknown;
+    };
+    if (!Array.isArray(value.blocks)) return null;
+    const lines: string[] = [];
+    for (const item of value.blocks) {
+      if (
+        item &&
+        typeof item === "object" &&
+        typeof (item as { text?: unknown }).text === "string"
+      ) {
+        lines.push((item as { text: string }).text);
+      }
+    }
+    if (Array.isArray(value.keys)) {
+      const keys = value.keys.map(String).filter(Boolean);
+      if (keys.length > 0) lines.push(`keys · ${keys.join(", ")}`);
+    }
+    return lines.length > 0 ? lines.join("\n\n") : null;
+  } catch {
+    return null;
+  }
+}
+
+function unescapeJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\r/g, "\r")
+      .replace(/\\\\/g, "\\");
+  }
+}
+
 function changePreview(change: ChangeGroup): string {
   const oldText = change.oldBlocks.map((block) => block.text).join("\n\n");
   const newText = change.newBlocks.map((block) => block.text).join("\n\n");
@@ -202,6 +283,10 @@ export class ScriptoriumDashboard extends ItemView {
   private documentSettingsOpen = false;
   private advancedToolsOpen = false;
   private projectSettingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshing = false;
+  private refreshPending = false;
+  private progressSection: HTMLElement | null = null;
+  private currentProject: ProjectConfig | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -226,6 +311,38 @@ export class ScriptoriumDashboard extends ItemView {
     await this.refresh();
   }
 
+  /**
+   * 진행률/스트리밍 갱신 전용 경량 refresh.
+   * 프로젝트 설정 UI, 변경 목록 UI, 문서 설정, Markdown 파일 읽기/파싱,
+   * 고급 도구 UI를 다시 생성하지 않고 진행률 표시 영역만 갱신한다.
+   * 전체 refresh가 진행 중일 때는 호출을 무시한다(전체 refresh가 최신 상태를 반영).
+   */
+  refreshProgress(): void {
+    if (this.refreshing) return;
+    const section = this.progressSection;
+    const project = this.currentProject;
+    if (!section || !project) return;
+    // 사용자가 스트리밍 창을 위로 올려서 읽고 있다면 스크롤을 강제하지 않는다.
+    const previousStream = section.querySelector(".scriptorium-stream");
+    const wasNearBottom =
+      !previousStream ||
+      previousStream.scrollHeight -
+        previousStream.scrollTop -
+        previousStream.clientHeight <
+      48;
+    section.empty();
+    this.renderProgress(section, project);
+    if (wasNearBottom) {
+      const stream = section.querySelector(".scriptorium-stream");
+      if (stream instanceof HTMLElement) {
+        // 레이아웃이 확정된 뒤 맨 아래로 스크롤한다.
+        requestAnimationFrame(() => {
+          stream.scrollTop = stream.scrollHeight;
+        });
+      }
+    }
+  }
+
   private renderHeader(
     container: HTMLElement,
     project: ProjectConfig,
@@ -245,13 +362,24 @@ export class ScriptoriumDashboard extends ItemView {
     statusPill(stats, "로컬", sync.localMessage, sync.local === "error");
     statusPill(stats, "릴레이", sync.relayMessage, sync.relay === "error");
     const actions = header.createDiv("scriptorium-actions");
-    button(
-      actions,
-      "번역 실행",
-      () => this.host.runTranslation(),
-      "languages",
-      "선택한 변경 사항의 번역을 실행합니다."
-    );
+    const progress = this.host.getTranslationProgress();
+    if (progress.running) {
+      button(
+        actions,
+        "번역 중지",
+        () => this.host.cancelTranslation(),
+        "square",
+        "진행 중인 번역 작업을 취소합니다."
+      ).addClass("scriptorium-danger-action");
+    } else {
+      button(
+        actions,
+        "번역 실행",
+        () => this.host.runTranslation(),
+        "languages",
+        "선택한 변경 사항의 번역을 실행합니다."
+      );
+    }
     button(
       actions,
       "JSON",
@@ -673,7 +801,7 @@ export class ScriptoriumDashboard extends ItemView {
     });
     body.createEl("pre", {
       cls: "scriptorium-stream",
-      text: progress.streamText || "(스트리밍 출력 없음)"
+      text: formatStreamPreview(progress.streamText) || "(스트리밍 출력 없음)"
     });
     const cancel = button(body, "작업 취소", () =>
       this.host.cancelTranslation()
@@ -766,11 +894,30 @@ export class ScriptoriumDashboard extends ItemView {
   }
 
   async refresh(): Promise<void> {
+    if (this.refreshing) {
+      this.refreshPending = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      await this.performRefresh();
+    } finally {
+      this.refreshing = false;
+      if (this.refreshPending) {
+        this.refreshPending = false;
+        await this.refresh();
+      }
+    }
+  }
+
+  private async performRefresh(): Promise<void> {
     const container = this.contentEl;
     container.empty();
     container.addClass("scriptorium-dashboard");
     const project = this.host.getActiveProject();
     if (!project) {
+      this.currentProject = null;
+      this.progressSection = null;
       container.createEl("h2", { text: "Scriptorium" });
       container.createDiv({
         cls: "scriptorium-empty",
@@ -782,12 +929,14 @@ export class ScriptoriumDashboard extends ItemView {
       statusPill(statuses, "릴레이", sync.relayMessage, sync.relay === "error");
       return;
     }
+    this.currentProject = project;
     const plan = this.host.getChangePlan();
     const documents = await this.host.getProjectDocumentSettings();
     this.renderHeader(container, project, plan);
     this.renderProjectSettings(container, project, documents);
     if (plan) this.renderChanges(container, plan);
-    this.renderProgress(container, project);
+    this.progressSection = container.createDiv("scriptorium-progress-section");
+    this.renderProgress(this.progressSection, project);
     this.renderAdvanced(container);
   }
 }

@@ -1,4 +1,4 @@
-export const DATA_VERSION = 3 as const;
+export const DATA_VERSION = 4 as const;
 export const SNAPSHOT_SCHEMA = 1 as const;
 
 export type SyncMode = "original" | "translated";
@@ -63,6 +63,21 @@ export interface AdvancedSettings {
   maxParallelTranslations: number;
 }
 
+// CBS 테스트 패널용 목 값. 빈 문자열/"0"/"-1" = falsy(레거시 #if 규칙).
+export interface CbsTestValues {
+  chatVars: Record<string, string>;
+  toggles: Record<string, boolean>;
+}
+
+// CBS 평가에 쓰이는 캐릭터/시간 메타(사용자 편집 가능).
+export interface CbsMockMeta {
+  char: string;
+  user: string;
+  persona: string;
+  model: string;
+  maxcontext: number;
+}
+
 export interface ScriptoriumSettings {
   version: typeof DATA_VERSION;
   projects: ProjectConfig[];
@@ -73,6 +88,8 @@ export interface ScriptoriumSettings {
   relay: RelaySettings;
   advanced: AdvancedSettings;
   migrationWarnings: string[];
+  cbsTestValues: Record<string, CbsTestValues>; // 키: 파일 경로
+  cbsMockMeta: CbsMockMeta;
 }
 
 export interface MarkdownFrontmatter {
@@ -305,7 +322,15 @@ export const DEFAULT_SETTINGS: ScriptoriumSettings = {
     deduplicateKoreanParentheses: false,
     maxParallelTranslations: 3
   },
-  migrationWarnings: []
+  migrationWarnings: [],
+  cbsTestValues: {},
+  cbsMockMeta: {
+    char: "Char",
+    user: "User",
+    persona: "Persona",
+    model: "test-model",
+    maxcontext: 8192
+  }
 };
 
 export function emptyProjectCache(): ProjectCache {

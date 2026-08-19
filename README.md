@@ -83,14 +83,14 @@ frontmatter에 `scriptorium: false`가 기록됩니다.
 프로젝트의 모든 문서를 받고, 변경이 없으면 RisuAI의 `nativeFetch` 브리지와
 호환되는 `200 + status: "not-modified"` 최소 응답이 반환됩니다. 기존
 `/v1/snapshot`은 릴레이 및 이전 클라이언트 호환을 위해
-유지합니다. 릴레이는 데스크톱과 모바일에서 모두 사용할 수 있습니다.
+유지합니다.
 
 ```js
 let etag = "";
 
-async function pollRelay(workerUrl, channel, token = "") {
+async function pollRelay(relayUrl, channel, token = "") {
   const response = await fetch(
-    `${workerUrl}/v1/channels/${encodeURIComponent(channel)}/snapshot`,
+    `${relayUrl}/v1/channels/${encodeURIComponent(channel)}/snapshot`,
     {
       headers: {
         ...(etag ? { "If-None-Match": etag } : {}),
@@ -116,8 +116,20 @@ RisuAI 클라이언트 플러그인은
 
 ## 릴레이
 
-대시보드 업로드용 Worker와 설정 절차는 [`relay/README.md`](relay/README.md)에
-있습니다. 저장소는 Worker를 자동 배포하지 않습니다.
+로컬 릴레이는 Obsidian과 RisuAI 사이에서 스냅샷을 중계하는 단일 Node.js
+스크립트입니다. 과거의 Cloudflare Worker를 대체하며 별도 빌드나 클라우드
+계정 없이 실행합니다.
+
+```sh
+node relay/relay.mjs
+```
+
+기본 주소는 `http://127.0.0.1:27125`이고 환경 변수(`RELAY_HOST`,
+`RELAY_PORT`, `RELAY_TOKEN`, `RELAY_STORE`)로 설정을 바꿀 수 있습니다.
+Obsidian Scriptorium 설정의 **릴레이** 항목과 RisuAI 플러그인의 릴레이 설정에
+같은 주소·채널·(토큰)을 입력하면 Obsidian이 스냅샷을 올리고 RisuAI가 폴링해
+가져옵니다. 자세한 API와 실행 옵션은 [`relay/README.md`](relay/README.md)를
+참고하세요.
 
 ## DEBUG 로그
 

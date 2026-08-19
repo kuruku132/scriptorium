@@ -101,7 +101,11 @@ function splitFrontmatter(content: string): {
     return { frontmatter: null, body: normalized, bodyStartLine: 0 };
   }
 
-  const closeIndex = normalized.indexOf("\n---", 4);
+  // 여는 "---\n" 바로 뒤의 닫는 구분자부터 찾는다. 시작 위치를 3(여는
+  // 구분자의 줄바꿈)으로 잡아 빈 frontmatter("---\n---\n")의 닫는 구분자도
+  // 인식한다. 이전의 4에서는 여는 구분자를 완전히 건너뛰느라 빈 frontmatter를
+  // 닫는 구분자 없는 것으로 취급해 본문 전체를 frontmatter 없이 해석했다.
+  const closeIndex = normalized.indexOf("\n---", 3);
   if (closeIndex < 0) {
     return { frontmatter: null, body: normalized, bodyStartLine: 0 };
   }
@@ -331,6 +335,149 @@ export function extractKeys(
       ? raw.split(",").map((key) => key.trim())
       : [fallback];
   return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+}
+
+/**
+ * AI가 반환한 번역 키를 정규화한다.
+ * 프로토콜은 keys를 문자열 배열로 요청하지만, 모델이 형식을 오해해
+ *   - 하나의 문자열 안에 YAML 리스트 마커와 줄바꿈을 넣거나("- a\n- b")
+ *   - 쉼표로 여러 키를 한 요소에 넣거나("a, b")
+ *   - 괄호로 부가 설명을 붙이는("한국어(영어)") 경우를 처리한다.
+ * 줄바꿈/쉼표/괄호를 모두 구분자로 취급해 개별 키로 분리하고,
+ * 리스트 마커(-, +, *, 1.)와 감싼 따옴표를 제거한 뒤 중복을 제거한다.
+ */
+export function normalizeKeys(keys: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of keys) {
+    for (const line of String(raw).split(/\r?\n/)) {
+      let token = line
+        .replace(/^\s*[-+*]\s*/, "")
+        .replace(/^\s*\d+[.)]\s*/, "")
+        .trim();
+      token = token.replace(/^["'`]+|["'`]+$/g, "").trim();
+      if (!token) continue;
+      for (const part of splitKeyToken(token)) {
+        if (part && !seen.has(part)) {
+          seen.add(part);
+          result.push(part);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * 단일 키 토큰을 쉼표와 괄호 기준으로 분리한다.
+ * "a, b" -> ["a", "b"]
+ * "한국어(영어)" -> ["한국어", "영어"]
+ * "a(b, c)d" -> ["a", "b", "c", "d"]
+ * 괄호 안의 내용은 별도 키로, 괄호 밖의 텍스트도 키로 취급한다.
+ */
+function splitKeyToken(token: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let buffer = "";
+  let group = "";
+  const flushBuffer = () => {
+    for (const item of buffer.split(/[,，]/)) {
+      const trimmed = item.trim();
+      if (trimmed) parts.push(trimmed);
+    }
+    buffer = "";
+  };
+  for (const ch of token) {
+    if (ch === "(" || ch === "（") {
+      if (depth === 0) flushBuffer();
+      else group += ch;
+      depth += 1;
+    } else if ((ch === ")" || ch === "）") && depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        for (const item of group.split(/[,，、]/)) {
+          const trimmed = item.trim();
+          if (trimmed) parts.push(trimmed);
+        }
+        group = "";
+      } else {
+        group += ch;
+      }
+    } else if (depth > 0) {
+      group += ch;
+    } else {
+      buffer += ch;
+    }
+  }
+  flushBuffer();
+  return parts;
+}
+
+function quoteKeyValue(key: string): string {
+  if (
+    /[:#,&*?|>%@`\[\]{}"'!^]/.test(key) ||
+    /^\s|\s$/.test(key) ||
+    /^[-+*]/.test(key) ||
+    /^\d/.test(key)
+  ) {
+    return `"${key.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+  return key;
+}
+
+function renderKeysBlock(keys: string[]): string[] {
+  return keys.map((key) => `  - ${quoteKeyValue(key)}`);
+}
+
+/**
+ * frontmatter 원문에서 keys 필드를 주어진 키로 교체한다.
+ * 인라인(keys: a, b)과 블록 리스트(keys:\n  - a\n  - b) 형식 모두 인식하며,
+ * 항상 블록 리스트 형식으로 다시 작성한다. keys가 빈 배열이면 필드를 제거한다.
+ */
+export function replaceFrontmatterKeys(
+  raw: string,
+  keys: string[]
+): string {
+  const eol = /\r\n/.test(raw) ? "\r\n" : "\n";
+  const lines = raw.split(/\r?\n/);
+  const keyLineIndex = lines.findIndex((line) => /^keys\s*:/.test(line));
+  if (keyLineIndex < 0) {
+    if (keys.length === 0) return raw;
+    const trimmed = raw.replace(/\s+$/, "");
+    const block = ["keys:", ...renderKeysBlock(keys)];
+    return trimmed === "" ? block.join(eol) : `${trimmed}${eol}${block.join(eol)}`;
+  }
+  let end = keyLineIndex + 1;
+  while (end < lines.length && /^\s*-\s+/.test(lines[end] ?? "")) {
+    end += 1;
+  }
+  const replacement = keys.length === 0 ? [] : ["keys:", ...renderKeysBlock(keys)];
+  lines.splice(keyLineIndex, end - keyLineIndex, ...replacement);
+  return lines.join(eol);
+}
+
+/**
+ * frontmatter의 keys 필드를 교체한 새 MarkdownFrontmatter를 반환한다.
+ * frontmatter가 없고 쓸 키가 있으면 keys만 있는 frontmatter를 새로 만든다.
+ */
+export function withFrontmatterKeys(
+  frontmatter: MarkdownFrontmatter | null,
+  keys: string[]
+): MarkdownFrontmatter | null {
+  if (!frontmatter) {
+    if (keys.length === 0) return null;
+    const block = ["keys:", ...renderKeysBlock(keys)];
+    const raw = block.join("\n");
+    return { raw, values: { keys: [...keys] } };
+  }
+  const raw = replaceFrontmatterKeys(frontmatter.raw, keys);
+  const values = { ...frontmatter.values };
+  if (keys.length > 0) {
+    values.keys = [...keys];
+  } else {
+    delete values.keys;
+  }
+  return { raw, values };
 }
 
 export function renderMarkdown(

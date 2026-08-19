@@ -95,6 +95,16 @@ describe("paragraph diff", () => {
     expect(createTranslationBatches([file])).toEqual([]);
   });
 
+  it("does not send an empty API batch for a delete change", () => {
+    const file = plan("One\n\nTwo", "하나\n\n둘", "One");
+    const deleted = file.changes.find((change) => change.kind === "delete");
+    expect(deleted).toBeDefined();
+    reconcileChangeSelections([file], [], []);
+    expect(deleted?.selected).toBe(true);
+    // 삭제 변경은 번역할 새 블록이 없으므로 API 요청을 만들지 않아야 한다.
+    expect(createTranslationBatches([file])).toEqual([]);
+  });
+
   it("selects new changes by default and preserves explicit deselection", () => {
     const file = plan(
       "One\n\nMiddle\n\nTwo",
@@ -199,6 +209,40 @@ describe("paragraph diff", () => {
       selectedChangeIds: new Set()
     });
     expect(accepted.conflicts).toHaveLength(0);
+  });
+
+  it("emits a metadata change and a keys batch on the first translation", () => {
+    // 첫 번역: 번역 파일이 없고 원문에 keys가 있다.
+    const previous = parseMarkdown("---\nkeys:\n  - Sword\n  - Mana\n---\nBody");
+    const cache = createInitialFileCache(
+      "project/file.md",
+      "project/translate/file.md",
+      previous,
+      null,
+      "file"
+    );
+    // createInitialFileCache는 번역 파일이 없으면 sourceKeys를 비운다.
+    expect(cache.sourceKeys).toEqual([]);
+    const firstPlan = planFileChanges({
+      sourcePath: "project/file.md",
+      translationPath: "project/translate/file.md",
+      basename: "file",
+      source: parseMarkdown("---\nkeys:\n  - Sword\n  - Mana\n---\nBody"),
+      translation: null,
+      cache,
+      selectedChangeIds: new Set()
+    });
+    const metadata = firstPlan.changes.find(
+      (change) => change.kind === "metadata"
+    );
+    expect(metadata).toBeDefined();
+    reconcileChangeSelections([firstPlan], [], []);
+    expect(metadata?.selected).toBe(true);
+    const batches = createTranslationBatches([firstPlan]);
+    expect(batches.flatMap((batch) => batch.translateKeys)).toEqual([
+      "Sword",
+      "Mana"
+    ]);
   });
 });
 

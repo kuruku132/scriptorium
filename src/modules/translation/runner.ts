@@ -15,6 +15,21 @@ Do not add prose or Markdown fences outside the JSON object.`;
 class StreamingUnsupportedError extends Error {}
 class RequestTimeoutError extends Error {}
 
+/**
+ * UI 미리보기용 streamText의 최대 길이.
+ * 실제 최종 응답은 streamingCompletion의 content/regularCompletion의 반환값에
+ * 별도로 보관되므로, UI 미리보기 문자열은 이 한계를 초과하지 않는다.
+ * 초과 시 최근 내용(꼬리)만 유지해 무제한 증가와 delta마다의 O(n) 복사를 방지한다.
+ */
+const STREAM_PREVIEW_LIMIT = 8192;
+
+function appendStreamPreview(prev: string, delta: string): string {
+  if (!delta) return prev;
+  const next = prev + delta;
+  if (next.length <= STREAM_PREVIEW_LIMIT) return next;
+  return `…\n${next.slice(-STREAM_PREVIEW_LIMIT)}`;
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -494,7 +509,7 @@ export class TranslationRunner {
           signal: controller.signal,
           onDelta: (delta) =>
             this.update({
-              streamText: this.progress.streamText + delta
+              streamText: appendStreamPreview(this.progress.streamText, delta)
             })
         });
       } catch (error) {
@@ -506,7 +521,7 @@ export class TranslationRunner {
           messages,
           signal: controller.signal
         });
-        this.update({ streamText: raw });
+        this.update({ streamText: appendStreamPreview("", raw) });
       }
 
       const expected = batch.blocks.map((block) => block.id);
@@ -530,7 +545,7 @@ export class TranslationRunner {
           malformed: raw,
           signal: controller.signal
         });
-        this.update({ streamText: repaired });
+        this.update({ streamText: appendStreamPreview("", repaired) });
         return cleanAndValidateBatchResult(
           parseTranslationResponse(
             repaired,

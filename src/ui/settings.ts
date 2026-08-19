@@ -203,17 +203,22 @@ export class ScriptoriumSettingTab extends PluginSettingTab {
     }
 
     containerEl.createEl("h3", { text: "릴레이" });
-    new Setting(containerEl).setName("릴레이 사용").addToggle((toggle) =>
-      toggle
-        .setValue(this.host.settings.relay.enabled)
-        .onChange(async (value) => {
-          this.host.settings.relay.enabled = value;
-          await this.changed();
-        })
-    );
-    new Setting(containerEl).setName("Worker 주소").addText((text) =>
+    new Setting(containerEl)
+      .setName("릴레이 사용")
+      .setDesc(
+        "별도로 실행한 로컬 릴레이(relay/relay.mjs)에 스냅샷을 올립니다."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.host.settings.relay.enabled)
+          .onChange(async (value) => {
+            this.host.settings.relay.enabled = value;
+            await this.changed();
+          })
+      );
+    new Setting(containerEl).setName("릴레이 주소").addText((text) =>
       text
-        .setPlaceholder("https://example.workers.dev")
+        .setPlaceholder("http://127.0.0.1:27125")
         .setValue(this.host.settings.relay.baseUrl)
         .onChange(async (value) => {
           this.host.settings.relay.baseUrl = value.trim();
@@ -228,7 +233,7 @@ export class ScriptoriumSettingTab extends PluginSettingTab {
     );
     new Setting(containerEl)
       .setName("릴레이 토큰")
-      .setDesc("Worker가 인증을 요구할 때 사용할 SecretStorage 이름입니다.")
+      .setDesc("릴레이가 인증을 요구할 때 사용할 SecretStorage 이름입니다.")
       .addComponent((element) =>
         new SecretComponent(this.app, element)
           .setValue(this.host.settings.relay.secretName)
