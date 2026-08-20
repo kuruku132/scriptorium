@@ -16,6 +16,18 @@ describe("scanCbsVariables", () => {
     expect(r.toggles).toEqual([]);
   });
 
+  it("extracts getglobalvar/setglobalvar names as chat vars", () => {
+    const r = scanCbsVariables("{{getglobalvar::toggle_SFW}}{{setglobalvar::G::1}}");
+    expect(r.chatVars).toEqual(["G", "toggle_SFW"]);
+    expect(r.toggles).toEqual([]);
+  });
+
+  it("does not double-count var:: inside getglobalvar::", () => {
+    // getglobalvar 안의 var:: 부분문자열은 이름 경계가 아니므로 var:: 그룹이 잡지 않는다.
+    const r = scanCbsVariables("{{getglobalvar::toggle_model}}");
+    expect(r.chatVars).toEqual(["toggle_model"]);
+  });
+
   it("extracts both sides of vis/visnot as chat vars", () => {
     const r = scanCbsVariables("{{#when A::vis::B}}Y{{/when}} {{#when A::visnot::B}}Y{{/when}}");
     expect(r.chatVars).toEqual(["A", "B"]);

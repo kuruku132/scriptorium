@@ -13,13 +13,19 @@ const NAME = "[A-Za-z0-9_\\p{L}\\p{N}]+";
 // 이름 경계: 이름 문자가 아닌 직전 위치에서만 매칭(setvar 안의 var 등 중복 방지).
 const LB = "(?<![A-Za-z0-9_\\p{L}\\p{N}])";
 
+// getvar 계열 키워드. getglobalvar/setglobalvar은 전역 변수 참조로, 로컬 채팅
+// 변수와 같은 이름 공간으로 취급해 패널에서 값 설정·프리뷰가 가능하게 한다.
+// LB 경계가 각 키워드 앞에 붙으므로 getvar가 getglobalvar 안에 중복 매칭되지 않는다.
+const VAR_FUNCS =
+  "getglobalvar|setglobalvar|getvar|setvar|setdefaultvar|addvar|tempvar|gettempvar|settempvar|declare";
+
 // 단일 정규식으로 모든 참조 폼을 한 번에 스윕.
 // 그룹: 1=var::, 2=toggle::, 3=getvar 계열, 4/5=vis·visnot 양변, 6/7=tis·tisnot 양변.
 const REF_RE = new RegExp(
   [
     `${LB}var::(${NAME})`,
     `${LB}toggle::(${NAME})`,
-    `${LB}(?:getvar|setvar|setdefaultvar|addvar|tempvar|gettempvar|settempvar|declare)::(${NAME})`,
+    `${LB}(?:${VAR_FUNCS})::(${NAME})`,
     `${LB}(${NAME})::(?:vis|visnot)::(${NAME})`,
     `${LB}(${NAME})::(?:tis|tisnot)::(${NAME})`
   ].join("|"),

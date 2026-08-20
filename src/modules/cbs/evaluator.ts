@@ -597,6 +597,13 @@ function evalPlaceholder(
   const name = PLACEHOLDER_ALIASES[rawName] ?? rawName;
 
   // 변수 조작
+  // getglobalvar/setglobalvar은 전역 변수 공간이지만 CBS 테스트 패널에서는
+  // 로컬 채팅 변수와 같은 값 저장소를 사용하므로 chatVars로 읽고 쓴다.
+  if (name === "getglobalvar") return ctx.chatVars[args[0] ?? ""] ?? "";
+  if (name === "setglobalvar") {
+    if (args[0] !== undefined) ctx.chatVars[args[0]] = args.slice(1).join("::");
+    return "";
+  }
   if (name === "getvar") return ctx.chatVars[args[0] ?? ""] ?? "";
   if (name === "setvar") {
     if (args[0] !== undefined) ctx.chatVars[args[0]] = args.slice(1).join("::");
