@@ -66,18 +66,15 @@ export function makeEvalContext(
   };
 }
 
-// 레거시 #if 규칙: 빈 문자열·0·-1 = falsy, 나머지 truthy.
+// RisuAI 조건문 진리 규칙: 평가된 상태가 "1" 또는 "true" 일 때만 참.
+// parser.svelte 의 blockStartMatcher (#if/#if_pure/#when) 가
+// `state === 'true' || state === '1'` 으로 판정하는 것과 일치.
+// 빈 문자열·"0"·"false"·그 외 모든 값은 거짓이다(레거시 0/-1 규칙이 아님).
 export function isTruthy(value: string | number | boolean | null | undefined): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0 && value !== -1 && !Number.isNaN(value);
-  const s = value as string;
-  if (s === "") return false;
-  if (/^-?\d+(?:\.\d+)?$/.test(s.trim())) {
-    const n = Number(s);
-    return n !== 0 && n !== -1;
-  }
-  return true;
+  if (typeof value === "number") return value === 1;
+  return value === "1" || value === "true";
 }
 
 function pad2(n: number): string {
@@ -261,9 +258,11 @@ function resolveNested(arg: string, ctx: EvalContext): string {
 }
 
 function mathEval(expr: string, ctx: EvalContext): string {
+  // 중첩 CBS 를 먼저 값으로 치환한 뒤 수식 평가. {{? {{getglobalvar::X}}>=1}} 같은
+  // 표현식이 안쪽부터 해석되도록 한다(resolveNested 는 깊이 인지 파서 사용).
   const resolved = resolveNested(expr, ctx);
   try {
-    const tokens = tokenizeMath(resolved);
+    const tokens = tokenizeMath(resolved, ctx);
     const { value, pos } = parseMath(tokens, 0);
     if (pos !== tokens.length) {
       ctx.errors.push(`수식 파싱 잔여: ${resolved}`);
@@ -281,7 +280,7 @@ interface MathToken {
   value: string;
 }
 
-function tokenizeMath(s: string): MathToken[] {
+function tokenizeMath(s: string, ctx: EvalContext): MathToken[] {
   const tokens: MathToken[] = [];
   let i = 0;
   while (i < s.length) {
@@ -300,6 +299,28 @@ function tokenizeMath(s: string): MathToken[] {
       i += 1;
       continue;
     }
+    // RisuAI 수식 변수 토큰: $name → getChatVar, @name → getGlobalChatVar.
+    // calcString(executeRPNCalculation) 의 $/@ 치환과 동일.
+    if (c === "$" || c === "@") {
+      let j = i + 1;
+      let name = "";
+      while (j < s.length && /[A-Za-z0-9_]/.test(s.charAt(j))) {
+        name += s.charAt(j);
+        j += 1;
+      }
+      const raw =
+        c === "$"
+          ? ctx.chatVars[name] ?? ""
+          : name.startsWith("toggle_")
+            ? ctx.toggles[name.slice("toggle_".length)]
+              ? "1"
+              : "0"
+            : ctx.chatVars[name] ?? "";
+      const n = Number(raw);
+      tokens.push({ type: "num", value: Number.isFinite(n) ? String(n) : "0" });
+      i = j;
+      continue;
+    }
     if (/[0-9.]/.test(c)) {
       let num = "";
       while (i < s.length && /[0-9.]/.test(s.charAt(i))) {
@@ -310,12 +331,12 @@ function tokenizeMath(s: string): MathToken[] {
       continue;
     }
     const two = s.slice(i, i + 2);
-    if (two === "==" || two === "!=" || two === ">=" || two === "<=") {
+    if (two === "==" || two === "!=" || two === ">=" || two === "<=" || two === "&&" || two === "||") {
       tokens.push({ type: "op", value: two });
       i += 2;
       continue;
     }
-    if ("+-*/%^<>".includes(c)) {
+    if ("+-*/%^<>!".includes(c)) {
       tokens.push({ type: "op", value: c });
       i += 1;
       continue;
@@ -331,9 +352,14 @@ function parseMath(tokens: MathToken[], start: number): { value: string; pos: nu
   return { value, pos };
 }
 
+// 비교·논리 연산은 RisuAI calcString 과 동일하게 우선순위 1(가장 낮음).
+// == != < > <= >= && || 를 한 단계에서 좌결합 처리한다.
 function parseMathCompare(tokens: MathToken[], start: number): { value: string; pos: number } {
   let { value: left, pos } = parseMathAdd(tokens, start);
-  while (tokens[pos]?.type === "op" && ["==", "!=", ">", "<", ">=", "<="].includes(tokens[pos]?.value ?? "")) {
+  while (
+    tokens[pos]?.type === "op" &&
+    ["==", "!=", ">", "<", ">=", "<=", "&&", "||"].includes(tokens[pos]?.value ?? "")
+  ) {
     const op = tokens[pos]?.value ?? "";
     pos += 1;
     const right = parseMathAdd(tokens, pos);
@@ -379,6 +405,11 @@ function parseMathPow(tokens: MathToken[], start: number): { value: string; pos:
 }
 
 function parseMathUnary(tokens: MathToken[], start: number): { value: string; pos: number } {
+  // 단항 부정(RisuAI calcString 의 '!' 연산자): 0이면 1, 아니면 0.
+  if (tokens[start]?.type === "op" && tokens[start]?.value === "!") {
+    const inner = parseMathUnary(tokens, start + 1);
+    return { value: String(toNumber(inner.value) === 0 ? 1 : 0), pos: inner.pos };
+  }
   if (tokens[start]?.type === "op" && tokens[start]?.value === "-") {
     const inner = parseMathUnary(tokens, start + 1);
     return { value: String(-toNumber(inner.value)), pos: inner.pos };
@@ -398,21 +429,25 @@ function parseMathPrimary(tokens: MathToken[], start: number): { value: string; 
   throw new Error(`수식 예기치 않은 토큰: ${t.value}`);
 }
 
+// RisuAI calcString(calculateRPN) 호환: 비교·논리 연산은 1/0(숫자)을 반환하고
+// 산술 연산은 parseFloat 기반 실수 연산이다. 결과는 항상 문자열.
 function applyMathOp(op: string, a: string, b: string): string {
-  if (op === "==") return String(toNumber(a) === toNumber(b));
-  if (op === "!=") return String(toNumber(a) !== toNumber(b));
-  if (op === ">") return String(toNumber(a) > toNumber(b));
-  if (op === "<") return String(toNumber(a) < toNumber(b));
-  if (op === ">=") return String(toNumber(a) >= toNumber(b));
-  if (op === "<=") return String(toNumber(a) <= toNumber(b));
   const x = toNumber(a);
   const y = toNumber(b);
   switch (op) {
+    case "==": return String(x === y ? 1 : 0);
+    case "!=": return String(x !== y ? 1 : 0);
+    case ">": return String(x > y ? 1 : 0);
+    case "<": return String(x < y ? 1 : 0);
+    case ">=": return String(x >= y ? 1 : 0);
+    case "<=": return String(x <= y ? 1 : 0);
+    case "&&": return String(x !== 0 && y !== 0 ? 1 : 0);
+    case "||": return String(x !== 0 || y !== 0 ? 1 : 0);
     case "+": return String(x + y);
     case "-": return String(x - y);
     case "*": return String(x * y);
-    case "/": return String(y === 0 ? 0 : x / y);
-    case "%": return String(y === 0 ? 0 : x % y);
+    case "/": return String(x / y);
+    case "%": return String(x % y);
     case "^": return String(Math.pow(x, y));
     default: return a;
   }
@@ -573,6 +608,16 @@ const PASSTHROUGH_PLACEHOLDERS = new Set([
   "iserror"
 ]);
 
+// 런타임/프롬프트 템플릿 전용 자리: RisuAI CBS 함수로 등록되지 않았지만 실제
+// 프롬프트 자료에 등장하며 Scriptorium 이 로컬에서 평가할 수 없는 자리들.
+// 원문을 그대로 보존하며 "미지원 플레이스홀더" 경고로 취급하지 않는다.
+// (오픈스트림 cbs.ts · parser.svelte 에 CBS 함수로 등록되어 있지 않음을 확인.)
+const RUNTIME_PASSTHROUGH_PLACEHOLDERS = new Set([
+  "chats",
+  "cache_point",
+  "cachepoint"
+]);
+
 function evalPlaceholder(
   rawName: string,
   args: string[],
@@ -585,7 +630,7 @@ function evalPlaceholder(
   // 패스스루: 원문 그대로(RisuAI가 채울 자리).
   // 런타임 의존 자리(previous_chat_log 등)는 Scriptorium에서 흉내 낼 수 없으므로
   // 중첩 CBS 평가 없이 원문을 보존해 경고/구문 오류로 취급하지 않는다.
-  if (PASSTHROUGH_PLACEHOLDERS.has(name)) {
+  if (PASSTHROUGH_PLACEHOLDERS.has(name) || RUNTIME_PASSTHROUGH_PLACEHOLDERS.has(name)) {
     return `{{${raw}}}`;
   }
 
@@ -655,9 +700,25 @@ function evalPlaceholder(
   }
   if (name === "call") return evalCall(a, ctx);
 
-  // 논리 / 비교 / 문자열 검사(RisuAI 호환: 참="1", 거짓="0")
-  if (name === "equal") return a[0] === a[1] ? "1" : "0";
-  if (name === "notequal") return a[0] !== a[1] ? "1" : "0";
+  // 논리 / 비교 / 문자열 검사(RisuAI cbs.ts 호환: 참="1", 거짓="0").
+  // and/or/not/all/any 는 문자열 "1" 만을 참으로 취급한다.
+  if (name === "equal") return (a[0] ?? "") === (a[1] ?? "") ? "1" : "0";
+  if (name === "notequal") return (a[0] ?? "") !== (a[1] ?? "") ? "1" : "0";
+  if (name === "greater") return Number(a[0] ?? "") > Number(a[1] ?? "") ? "1" : "0";
+  if (name === "less") return Number(a[0] ?? "") < Number(a[1] ?? "") ? "1" : "0";
+  if (name === "greaterequal") return Number(a[0] ?? "") >= Number(a[1] ?? "") ? "1" : "0";
+  if (name === "lessequal") return Number(a[0] ?? "") <= Number(a[1] ?? "") ? "1" : "0";
+  if (name === "and") return a[0] === "1" && a[1] === "1" ? "1" : "0";
+  if (name === "or") return a[0] === "1" || a[1] === "1" ? "1" : "0";
+  if (name === "not") return a[0] === "1" ? "0" : "1";
+  if (name === "all") {
+    const arr = a.length > 1 ? a : parseArrayString(a[0] ?? "");
+    return arr.every((f) => String(f) === "1") ? "1" : "0";
+  }
+  if (name === "any") {
+    const arr = a.length > 1 ? a : parseArrayString(a[0] ?? "");
+    return arr.some((f) => String(f) === "1") ? "1" : "0";
+  }
   if (name === "contains") {
     const haystack = a[0] ?? "";
     const needle = a[1] ?? "";
@@ -669,6 +730,13 @@ function evalPlaceholder(
   if (name === "endswith") {
     return (a[0] ?? "").endsWith(a[1] ?? "") ? "1" : "0";
   }
+
+  // 문자열 / 배열(RisuAI cbs.ts: trim·length·makearray)
+  if (name === "trim") return (a[0] ?? "").trim();
+  if (name === "length") return String((a[0] ?? "").length);
+  if (name === "makearray") return JSON.stringify(a);
+  if (name === "arraylength") return String(parseArrayString(a[0] ?? "").length);
+  if (name === "random" || name === "pick") return evalRandom(a);
 
   // 캐릭터/프롬프트 메타(목 값)
   if (name === "char") return ctx.mockMeta.char;
@@ -752,6 +820,40 @@ function parseEachHead(head: string): { arrayExpr: string; varName: string } {
   return { arrayExpr: s, varName: "" };
 }
 
+// RisuAI parseArray: JSON 배열 문자열을 파싱, 실패 시 빈 배열.
+// cbs.ts 의 defaultCBSRegisterArg.parseArray 와 동일 동작.
+function parseArrayString(s: string): unknown[] {
+  try {
+    const arr = JSON.parse(s);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+// RisuAI randomPickImpl 호환. Scriptorium 은 저작 시점 프리뷰이므로
+// RisuAI 의 tokenizeAccurate 모드처럼 결정적으로 첫 원소(인덱스 0)를 선택한다.
+// - 인자 없음: 0~1 난수 자리 → "0"(결정적 근사)
+// - 인자 1개: [..] JSON 배열이면 파싱, 아니면 : 또는 , 로 분리(\\, 이스케이프 지원)
+// - 인자 2개 이상: 인자 그대로 후보
+function evalRandom(args: string[]): string {
+  if (args.length === 0) return "0";
+  let arr: unknown[];
+  if (args.length === 1) {
+    const s = args[0] ?? "";
+    if (s.startsWith("[") && s.endsWith("]")) {
+      arr = parseArrayString(s);
+    } else {
+      arr = s.replace(/\\,/g, "§X").split(/:|,/g).map((x) => x.replace(/§X/g, ","));
+    }
+  } else {
+    arr = args;
+  }
+  if (arr.length === 0) return "";
+  const element = arr[0];
+  return typeof element === "string" ? element : JSON.stringify(element) ?? "";
+}
+
 function resolveArray(expr: string, ctx: EvalContext): unknown {
   const trimmed = expr.trim();
   if (trimmed.startsWith("[")) {
@@ -793,41 +895,51 @@ function evalBlock(node: BlockNode, ctx: EvalContext): string {
   }
 }
 
+// #if/#if_pure/#when 헤더: 중첩 CBS 를 먼저 평가한 뒤 조건 판정.
+// {{#if_pure {{equal::A::A}}}} → 헤더가 "1" 로 치환된 뒤 #if_pure 1 판정.
 function evalWhen(node: BlockNode, ctx: EvalContext): string {
-  const cond = evalCondition(node.headArgs, ctx);
+  const resolvedHead = resolveNested(node.headArgs, ctx);
+  const cond = evalCondition(resolvedHead, ctx);
   const branch = cond ? node.body : node.elseBody;
   return applyWhitespace(node.whitespaceMode, evaluateNodes(branch, ctx));
 }
 
+// #each: 헤더 전체의 중첩 CBS 를 먼저 평가한다.
+// {{#each {{array::A::B}} v}} → 헤더가 ["A","B"] v 로 치환된 뒤 배열 순회.
+// 중첩 루프 변수(tempVars[varName]·loopElement)는 진입 전 값을 저장·복원한다.
 function evalEach(node: BlockNode, ctx: EvalContext): string {
-  const { arrayExpr, varName } = parseEachHead(node.headArgs);
+  const resolvedHead = resolveNested(node.headArgs, ctx);
+  const { arrayExpr, varName } = parseEachHead(resolvedHead);
   const arr = resolveArray(arrayExpr, ctx);
+  const savedVar = varName ? ctx.tempVars[varName] : undefined;
+  const savedLoop = ctx.loopElement;
+  const restore = () => {
+    if (varName) {
+      if (savedVar === undefined) delete ctx.tempVars[varName];
+      else ctx.tempVars[varName] = savedVar;
+    }
+    ctx.loopElement = savedLoop;
+  };
   if (!Array.isArray(arr)) {
     // 비배열은 본문 1회 통과
-    const saved = varName ? ctx.tempVars[varName] : undefined;
-    const savedLoop = ctx.loopElement;
     if (varName) ctx.tempVars[varName] = String(arr ?? "");
     ctx.loopElement = String(arr ?? "");
     const out = applyWhitespace(node.whitespaceMode, evaluateNodes(node.body, ctx));
-    if (varName) {
-      if (saved === undefined) delete ctx.tempVars[varName];
-      else ctx.tempVars[varName] = saved;
-    }
-    ctx.loopElement = savedLoop;
+    restore();
     return out;
   }
   if (arr.length > MAX_EACH_ITERATIONS) {
     ctx.errors.push(`#each 반복 한도 초과(${arr.length})`);
+    restore();
     return "";
   }
-  const savedLoop = ctx.loopElement;
   let out = "";
   for (const item of arr) {
     if (varName) ctx.tempVars[varName] = String(item);
     ctx.loopElement = String(item);
     out += applyWhitespace(node.whitespaceMode, evaluateNodes(node.body, ctx));
   }
-  ctx.loopElement = savedLoop;
+  restore();
   return out;
 }
 

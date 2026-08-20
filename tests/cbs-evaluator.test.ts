@@ -27,10 +27,16 @@ describe("evaluate — conditions (#when)", () => {
     expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "" }))).toBe("N");
   });
 
-  it("treats 0 and -1 as falsy (legacy #if rule)", () => {
+  it("uses upstream strict truthiness (only 1/true render)", () => {
+    // RisuAI parser.svelte blockStartMatcher: state === '1' || state === 'true' 만 참.
+    // 빈 문자열·0·-1·2·false 모두 렌더하지 않는다(레거시 0/-1 규칙이 아님).
+    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "1" }))).toBe("Y");
+    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "true" }))).toBe("Y");
     expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "0" }))).toBe("N");
     expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "-1" }))).toBe("N");
-    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "2" }))).toBe("Y");
+    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "2" }))).toBe("N");
+    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "false" }))).toBe("N");
+    expect(ev("{{#when var::A}}Y{{:else}}N{{/when}}", ctx({ A: "" }))).toBe("N");
   });
 
   it("renders else branch when no else given and falsy", () => {
@@ -122,15 +128,31 @@ describe("evaluate — math {{? }}", () => {
     expect(ev("{{? 2^3}}")).toBe("8");
   });
 
-  it("comparison returns boolean string", () => {
-    expect(ev("{{? 2>1}}")).toBe("true");
-    expect(ev("{{? 1==1}}")).toBe("true");
-    expect(ev("{{? 1!=2}}")).toBe("true");
+  it("comparison/logical returns 1/0 (RisuAI calcString semantics)", () => {
+    // RisuAI calcString(calculateRPN) 는 비교·논리 연산을 1/0 숫자로 반환한다.
+    expect(ev("{{? 2>1}}")).toBe("1");
+    expect(ev("{{? 1==1}}")).toBe("1");
+    expect(ev("{{? 1!=2}}")).toBe("1");
+    expect(ev("{{? 1>2}}")).toBe("0");
+    expect(ev("{{? 1&&1}}")).toBe("1");
+    expect(ev("{{? 1&&0}}")).toBe("0");
+    expect(ev("{{? 0||1}}")).toBe("1");
+    expect(ev("{{? !0}}")).toBe("1");
+    expect(ev("{{? !1}}")).toBe("0");
   });
 
-  it("resolves inline getvar tokens (no nested braces)", () => {
-    // 참고: {{? }} 안의 중첩 {{...}} 는 토크나이저 한계로 미지원(UI 한계 표시).
+  it("resolves nested CBS inside {{? }} before math evaluation", () => {
     expect(ev("{{? 1+2}}")).toBe("3");
+    expect(ev("{{? {{getglobalvar::toggle_trpgmode}}>=1}}", ctx({}, { trpgmode: true }))).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_trpgmode}}>=1}}", ctx({}, { trpgmode: false }))).toBe("0");
+    expect(ev("{{? {{length::hello}}>0}}")).toBe("1");
+    expect(ev("{{? {{length::{{getglobalvar::tags}}}}>0}}", ctx({ tags: "" }))).toBe("0");
+    expect(ev("{{? {{length::{{getglobalvar::tags}}}}>0}}", ctx({ tags: "abc" }))).toBe("1");
+  });
+
+  it("resolves $var / @var math tokens", () => {
+    expect(ev("{{? $A+1}}", ctx({ A: "5" }))).toBe("6");
+    expect(ev("{{? @G*2}}", ctx({ G: "3" }))).toBe("6");
   });
 });
 
@@ -302,6 +324,183 @@ describe("evaluate — nested placeholders", () => {
       "{{equal::{{getglobalvar::toggle_test}}::1}}{{contains::{{previous_chat_log::{{slot::item}}}}::hello}}",
       c
     );
+    expect(c.errors).toEqual([]);
+  });
+});
+
+// === 2차 호환성 패스: upstream RisuAI cbs.ts 함수 + 중첩 CBS 회귀 =============
+
+describe("evaluate — upstream CBS functions (2nd-pass)", () => {
+  it("random: multiple args → first (deterministic preview, RisuAI tokenizeAccurate)", () => {
+    expect(ev("{{random::a::b::c}}")).toBe("a");
+    expect(ev("{{random::1::1::2::3}}")).toBe("1");
+  });
+
+  it("random: trailing empty arg is a valid pool element (no warning)", () => {
+    const c = ctx();
+    const r = evaluate("{{random::special ability::special item::power awakening::romance::item enhancement::}}", c);
+    expect(r.value).toBe("special ability");
+    expect(c.errors).toEqual([]);
+  });
+
+  it("random: single comma/colon string is split into a pool", () => {
+    expect(ev("{{random::a,b,c}}")).toBe("a");
+    expect(ev("{{random::a:b:c}}")).toBe("a");
+  });
+
+  it("random: zero args returns a deterministic number placeholder", () => {
+    expect(ev("{{random}}")).toBe("0");
+  });
+
+  it("trim removes surrounding whitespace", () => {
+    expect(ev("{{trim::  hello  }}")).toBe("hello");
+    expect(ev("{{trim::\thello\n}}")).toBe("hello");
+  });
+
+  it("length returns character count", () => {
+    expect(ev("{{length::hello}}")).toBe("5");
+    expect(ev("{{length::}}")).toBe("0");
+  });
+
+  it("makearray / array / a aliases produce a JSON array", () => {
+    expect(ev("{{array::a::b::c}}")).toBe('["a","b","c"]');
+    expect(ev("{{makearray::1::2}}")).toBe('["1","2"]');
+    expect(ev("{{a::x}}")).toBe('["x"]');
+  });
+
+  it("and / or / not use strict '1' truthiness", () => {
+    expect(ev("{{and::1::1}}")).toBe("1");
+    expect(ev("{{and::1::0}}")).toBe("0");
+    expect(ev("{{and::true::1}}")).toBe("0"); // "true" is not "1"
+    expect(ev("{{or::0::1}}")).toBe("1");
+    expect(ev("{{or::0::0}}")).toBe("0");
+    expect(ev("{{not::1}}")).toBe("0");
+    expect(ev("{{not::0}}")).toBe("1");
+  });
+
+  it("all / any over multiple args or a JSON array", () => {
+    expect(ev("{{all::1::1::1}}")).toBe("1");
+    expect(ev("{{all::1::0::1}}")).toBe("0");
+    expect(ev("{{any::0::1::0}}")).toBe("1");
+    expect(ev("{{any::0::0::0}}")).toBe("0");
+    expect(ev('{{all::[1,1,1]}}')).toBe("1");
+    expect(ev('{{any::[0,0,1]}}')).toBe("1");
+  });
+
+  it("greater / less / greaterequal / lessequal numeric compare (1/0)", () => {
+    expect(ev("{{greater::10::5}}")).toBe("1");
+    expect(ev("{{greater::5::10}}")).toBe("0");
+    expect(ev("{{less::5::10}}")).toBe("1");
+    expect(ev("{{greaterequal::10::10}}")).toBe("1");
+    expect(ev("{{lessequal::5::5}}")).toBe("1");
+    expect(ev("{{less_equal::5::5}}")).toBe("1");
+    expect(ev("{{greater_equal::10::5}}")).toBe("1");
+  });
+});
+
+describe("evaluate — nested CBS in block headers", () => {
+  it("#if_pure evaluates nested equal then renders on 1", () => {
+    expect(ev("{{#if_pure {{equal::A::A}}}}YES{{/if}}")).toBe("YES");
+  });
+
+  it("#if_pure evaluates nested equal then skips on 0", () => {
+    expect(ev("{{#if_pure {{equal::1::0}}}}YES{{/if}}")).toBe("");
+  });
+
+  it("#if_pure with nested {{? }} comparison", () => {
+    expect(ev("{{#if_pure {{? 2>1}}}}YES{{/if}}")).toBe("YES");
+    expect(ev("{{#if_pure {{? 1>2}}}}YES{{/if}}")).toBe("");
+  });
+
+  it("#if_pure with nested and/not_equal/{{?}} compound (upstream pattern)", () => {
+    const c = ctx({ tags: '["x"]' });
+    const src =
+      "{{#if_pure {{and::{{not_equal::{{getglobalvar::tags}}::null}}::{{? {{length::{{getglobalvar::tags}}}}>0}}}}}}YES{{/if}}";
+    expect(ev(src, c)).toBe("YES");
+  });
+
+  it("#if_pure with nested any of {{?}} comparisons (deus pattern)", () => {
+    // toggle_deus → Scriptorium 토글 'deus'; getglobalvar::toggle_deus → "1"/"0".
+    // RisuAI calcString 은 '=' 를 지원하지만 Scriptorium 은 '==' 를 노출한다.
+    const src =
+      "{{#if_pure {{any::{{? {{getglobalvar::toggle_deus}}==1}}::{{? {{getglobalvar::toggle_deus}}==2}}}}}}YES{{/if}}";
+    expect(ev(src, ctx({}, { deus: true }))).toBe("YES");
+    expect(ev(src, ctx({}, { deus: false }))).toBe("");
+  });
+
+  it("#when with nested CBS in header", () => {
+    expect(ev("{{#when {{equal::1::1}}}}Y{{:else}}N{{/when}}")).toBe("Y");
+    expect(ev("{{#when {{equal::1::0}}}}Y{{:else}}N{{/when}}")).toBe("N");
+  });
+});
+
+describe("evaluate — #each with nested array expressions", () => {
+  it("iterates a nested {{array::...}} expression", () => {
+    expect(ev("{{#each {{array::A::B}} item}}{{slot::item}}{{/each}}")).toBe("AB");
+  });
+
+  it("iterates a nested array with as keyword", () => {
+    expect(ev('{{#each {{array::A::B::C}} as V}}{{slot::V}}{{/each}}')).toBe("ABC");
+  });
+
+  it("slot resolves inside nested placeholders (getglobalvar::{{slot::v}})", () => {
+    // toggle_ 접두가 없는 전역 변수 이름을 써야 getglobalvar 이 채팅 변수에서 읽는다.
+    const c = ctx({ var_a: "1", var_b: "2" });
+    expect(ev("{{#each {{array::var_a::var_b}} v}}{{getglobalvar::{{slot::v}}}}{{/each}}", c)).toBe("12");
+  });
+
+  it("#if_pure inside #each uses the loop variable via nested slot", () => {
+    // toggle_genre1 은 Scriptorium 에서 토글 'genre1' 로 매핑된다.
+    const c = ctx({}, { genre1: true, genre2: false, genre3: true });
+    const src =
+      "{{#each {{array::toggle_genre1::toggle_genre2::toggle_genre3}} genreVar}}{{#if_pure {{equal::{{getglobalvar::{{slot::genreVar}}}}::1}}}}ON{{/if}}|{{/each}}";
+    expect(ev(src, c)).toBe("ON||ON|");
+  });
+
+  it("preserves outer loop variable across nested #each", () => {
+    const c = ctx();
+    const src =
+      "{{#each {{array::X::Y}} outer}}{{slot::outer}}:{{#each {{array::1::2}} inner}}{{slot::outer}}{{slot::inner}}{{/each}},{{/each}}";
+    expect(ev(src, c)).toBe("X:X1X2,Y:Y1Y2,");
+  });
+});
+
+describe("evaluate — runtime passthrough placeholders (no warning)", () => {
+  it("chats and cache_point preserved verbatim without warnings", () => {
+    const c = ctx();
+    const r = evaluate("{{chats}}-{{cache_point}}", c);
+    expect(r.value).toBe("{{chats}}-{{cache_point}}");
+    expect(c.errors).toEqual([]);
+  });
+});
+
+describe("evaluate — full nested trim/#if_pure/#each pattern (2nd-pass regression)", () => {
+  it("evaluates the composite upstream pattern end-to-end", () => {
+    const c = ctx(
+      {
+        // tags: 비-토글 전역 변수(getglobalvar::tags 가 채팅 변수에서 읽도록).
+        tags: '["drama","romance"]'
+      },
+      // toggle_genre1/2/3 과 toggle_deus 는 Scriptorium 토글로 매핑된다.
+      { genre1: true, genre2: false, genre3: true, deus: true }
+    );
+    const src = [
+      "{{trim::",
+      "  {{#if_pure {{and::{{not_equal::{{getglobalvar::tags}}::null}}::{{? {{length::{{getglobalvar::tags}}}}>0}}}}}}",
+      "    {{#each {{array::toggle_genre1::toggle_genre2::toggle_genre3}} genreVar}}",
+      "      {{#if_pure {{equal::{{getglobalvar::{{slot::genreVar}}}}::1}}}}[{{slot::genreVar}}]{{/if}}",
+      "    {{/each}}",
+      "    {{#if_pure {{any::{{? {{getglobalvar::toggle_deus}}==1}}::{{? {{getglobalvar::toggle_deus}}==2}}}}}}DEUS{{/if}}",
+      "  {{/if}}",
+      "}}"
+    ].join("\n");
+    const r = evaluate(src, c);
+    // outer trim strips the surrounding newline whitespace; inner keep-mode bodies
+    // collapse via legacy trim. Result contains the two active genres and DEUS.
+    expect(r.value).toContain("[toggle_genre1]");
+    expect(r.value).toContain("[toggle_genre3]");
+    expect(r.value).not.toContain("[toggle_genre2]");
+    expect(r.value).toContain("DEUS");
     expect(c.errors).toEqual([]);
   });
 });
