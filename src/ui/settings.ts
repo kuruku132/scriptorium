@@ -176,6 +176,57 @@ export class ScriptoriumSettingTab extends PluginSettingTab {
           })
       );
 
+    containerEl.createEl("h3", { text: "CBS 테스트" });
+    new Setting(containerEl)
+      .setName("캐릭터 이름(char)")
+      .setDesc("CBS 프리뷰의 {{char}} 치환에 사용할 목 값입니다.")
+      .addText((text) =>
+        text
+          .setValue(this.host.settings.cbsMockMeta.char)
+          .onChange(async (value) => {
+            this.host.settings.cbsMockMeta.char = value;
+            await this.host.saveSettings();
+          })
+      );
+    new Setting(containerEl).setName("사용자 이름(user)").addText((text) =>
+      text
+        .setValue(this.host.settings.cbsMockMeta.user)
+        .onChange(async (value) => {
+          this.host.settings.cbsMockMeta.user = value;
+          await this.host.saveSettings();
+        })
+    );
+    new Setting(containerEl).setName("페르소나(persona)").addText((text) =>
+      text
+        .setValue(this.host.settings.cbsMockMeta.persona)
+        .onChange(async (value) => {
+          this.host.settings.cbsMockMeta.persona = value;
+          await this.host.saveSettings();
+        })
+    );
+    new Setting(containerEl).setName("모델(model)").addText((text) =>
+      text
+        .setValue(this.host.settings.cbsMockMeta.model)
+        .onChange(async (value) => {
+          this.host.settings.cbsMockMeta.model = value;
+          await this.host.saveSettings();
+        })
+    );
+    new Setting(containerEl)
+      .setName("최대 컨텍스트(maxcontext)")
+      .setDesc("CBS {{maxcontext}} 치환에 사용할 양의 정수 값입니다.")
+      .addText((text) =>
+        text
+          .setValue(String(this.host.settings.cbsMockMeta.maxcontext))
+          .onChange(async (value) => {
+            const number = Number(value);
+            if (Number.isInteger(number) && number > 0) {
+              this.host.settings.cbsMockMeta.maxcontext = number;
+              await this.host.saveSettings();
+            }
+          })
+      );
+
     if (Platform.isDesktopApp) {
       containerEl.createEl("h3", { text: "로컬 서버" });
       new Setting(containerEl)

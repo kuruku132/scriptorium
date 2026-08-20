@@ -1,8 +1,10 @@
 import {
+  MarkdownView,
   Notice,
   Plugin,
   TFile,
-  TFolder
+  TFolder,
+  WorkspaceLeaf
 } from "obsidian";
 import {
   compileSnapshot,
@@ -35,6 +37,8 @@ import {
   DEFAULT_SETTINGS,
   emptyProjectCache,
   type ChangeGroup,
+  type CbsMockMeta,
+  type CbsTestValues,
   type LorebookDocumentProject,
   type ProjectCache,
   type ProjectChangePlan,
@@ -54,6 +58,16 @@ import {
 } from "./ui/settings";
 import { ProjectFolderModal } from "./ui/modals/project-folder-modal";
 import { JsonFileModal } from "./ui/modals/json-file-modal";
+import {
+  CBS_PANEL_VIEW_TYPE,
+  CbsPanelView,
+  type CbsPanelHost
+} from "./ui/cbs-panel";
+import {
+  CBS_PREVIEW_VIEW_TYPE,
+  CbsPreviewView
+} from "./ui/cbs-preview";
+import { CbsSnippetModal } from "./ui/snippet-modal";
 import { VaultScanGuard } from "./app/vault-scan-guard";
 import { ProjectRuntime } from "./app/project-runtime";
 import { DocumentProjectCache } from "./app/document-project-cache";
@@ -63,7 +77,7 @@ const DEBUG = false;
 
 export default class ScriptoriumPlugin
   extends Plugin
-  implements DashboardHost, SettingsHost
+  implements DashboardHost, SettingsHost, CbsPanelHost
 {
   settings: ScriptoriumSettings = structuredClone(DEFAULT_SETTINGS);
   private data: RuntimeData = {
@@ -83,6 +97,7 @@ export default class ScriptoriumPlugin
     localMessage: "꺼짐",
     relayMessage: "꺼짐"
   };
+  private cbsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   async onload(): Promise<void> {
     const raw = (await this.loadData()) as unknown;
@@ -150,6 +165,7 @@ export default class ScriptoriumPlugin
       invalidateDocumentProject: (projectId) =>
         this.documentProjects.invalidate(projectId),
       isVaultScanSuppressed: () => this.vaultScan.isSuppressed(),
+      withVaultScanSuppressed: (action) => this.vaultScan.withSuppressed(action),
       debug: (event, details) => this.debug(event, details)
     });
 
@@ -179,8 +195,19 @@ export default class ScriptoriumPlugin
       DASHBOARD_VIEW_TYPE,
       (leaf) => new ScriptoriumDashboard(leaf, this)
     );
+    this.registerView(
+      CBS_PANEL_VIEW_TYPE,
+      (leaf) => new CbsPanelView(leaf, this)
+    );
+    this.registerView(
+      CBS_PREVIEW_VIEW_TYPE,
+      (leaf) => new CbsPreviewView(leaf, this)
+    );
     this.addRibbonIcon("book-open-text", "Scriptorium 대시보드", () => {
       void this.openDashboard();
+    });
+    this.addRibbonIcon("flask-conical", "CBS 테스트", () => {
+      void this.openCbsPanel();
     });
     this.addSettingTab(new ScriptoriumSettingTab(this.app, this));
     this.registerCommands();
@@ -198,6 +225,7 @@ export default class ScriptoriumPlugin
     this.view.dispose();
     this.translation.dispose();
     this.relay.cancelScheduled();
+    if (this.cbsSaveTimer) clearTimeout(this.cbsSaveTimer);
     void this.localServer.stop();
   }
 
@@ -236,6 +264,21 @@ export default class ScriptoriumPlugin
       id: "run-legacy-migration",
       name: "레거시 데이터 마이그레이션 실행",
       callback: () => void this.runLegacyMigration()
+    });
+    this.addCommand({
+      id: "open-cbs-panel",
+      name: "CBS 테스트 패널 열기",
+      callback: () => void this.openCbsPanel()
+    });
+    this.addCommand({
+      id: "open-cbs-preview",
+      name: "CBS 프리뷰 열기",
+      callback: () => void this.openCbsPreview()
+    });
+    this.addCommand({
+      id: "insert-cbs-snippet",
+      name: "CBS 스니펫 삽입",
+      callback: () => new CbsSnippetModal(this.app).open()
     });
   }
 
@@ -362,6 +405,109 @@ export default class ScriptoriumPlugin
 
   getGlobalTranslationGlossary(): string {
     return this.settings.translationGlossary;
+  }
+
+  // ── CbsPanelHost ───────────────────────────────────────────────
+  // CBS 테스트 패널/프리뷰가 활성 Markdown 에디터 원문을 읽고 테스트 값을
+  // 영속화할 수 있도록 플러그인이 제공하는 호스트 인터페이스.
+
+  getActiveEditorText(): string | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    return view ? view.editor.getValue() : null;
+  }
+
+  getActiveFilePath(): string | null {
+    const file = this.app.workspace.getActiveFile();
+    return file && file.extension === "md" ? file.path : null;
+  }
+
+  getCbsTestValues(path: string): CbsTestValues {
+    return (
+      this.settings.cbsTestValues[path] ?? {
+        chatVars: {},
+        toggles: {}
+      }
+    );
+  }
+
+  getCbsMockMeta(): CbsMockMeta {
+    return this.settings.cbsMockMeta;
+  }
+
+  setCbsChatVar(path: string, name: string, value: string): void {
+    const values = this.ensureCbsTestValues(path);
+    values.chatVars[name] = value;
+    this.scheduleCbsSave();
+  }
+
+  setCbsToggle(path: string, name: string, value: boolean): void {
+    const values = this.ensureCbsTestValues(path);
+    values.toggles[name] = value;
+    this.scheduleCbsSave();
+  }
+
+  resetCbsTestValues(path: string): void {
+    delete this.settings.cbsTestValues[path];
+    this.saveCbsSettings();
+  }
+
+  saveCbsSettings(): void {
+    void this.saveSettings();
+  }
+
+  async openCbsPanel(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(CBS_PANEL_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = this.app.workspace.getLeftLeaf(false) ?? undefined;
+      await leaf?.setViewState({
+        type: CBS_PANEL_VIEW_TYPE,
+        active: true
+      });
+    }
+    if (leaf) this.app.workspace.revealLeaf(leaf);
+  }
+
+  async openCbsPreview(): Promise<void> {
+    // 프리뷰는 리본 사이드바(좌/우 리프)가 아니라 메인 에디터 영역의
+    // 일반 마크다운 문서 탭처럼, 에디터 옆 50/50 수직 분할로 띄운다.
+    const existing = this.app.workspace.getLeavesOfType(CBS_PREVIEW_VIEW_TYPE)[0];
+    let leaf: WorkspaceLeaf | undefined = existing;
+    // 기존 인스턴스가 좁은 사이드바에 있다면 메인 영역 분할로 옮긴다.
+    if (existing) {
+      const root = existing.getRoot();
+      if (
+        root === this.app.workspace.leftSplit ||
+        root === this.app.workspace.rightSplit
+      ) {
+        existing.detach();
+        leaf = undefined;
+      }
+    }
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("split", "vertical");
+      await leaf.setViewState({
+        type: CBS_PREVIEW_VIEW_TYPE,
+        active: true
+      });
+    }
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  private ensureCbsTestValues(path: string): CbsTestValues {
+    const existing = this.settings.cbsTestValues[path];
+    if (existing) return existing;
+    const created: CbsTestValues = { chatVars: {}, toggles: {} };
+    this.settings.cbsTestValues[path] = created;
+    return created;
+  }
+
+  // CBS 테스트 값은 입력마다 갱신되므로 저장을 가볍게 디바운스(400ms).
+  private scheduleCbsSave(): void {
+    if (this.cbsSaveTimer) clearTimeout(this.cbsSaveTimer);
+    this.cbsSaveTimer = setTimeout(() => {
+      this.cbsSaveTimer = null;
+      void this.saveSettings();
+    }, 400);
   }
 
   async getProjectDocumentSettings(): Promise<ProjectDocumentSetting[]> {

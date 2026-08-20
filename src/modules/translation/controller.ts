@@ -215,14 +215,13 @@ export class TranslationController {
     ) {
       return;
     }
-    // 번역 파일의 frontmatter는 기존 번역본이 있으면 그것을 기준으로,
-    // 없으면 원문 frontmatter를 가져와 keys를 번역된 키로 교체한다.
-    // 이렇게 하지 않으면 첫 번역 시 원문 frontmatter가 통째로 사라진다.
+    // 번역 파일의 frontmatter는 원문을 기준으로 한다. 비-키 메타데이터
+    // (title/secondkey/selective/...)는 항상 원문을 따라 번역본과 일치시키고,
+    // keys만 번역된 키로 교체한다. 원문에 frontmatter가 없을 때만 기존
+    // 번역본 frontmatter로 폴백한다. 번역된 키가 없으면 원문 keys를
+    // 그대로 두어 첫 번역 전에도 frontmatter가 통째로 사라지지 않는다.
     const baseFrontmatter =
-      filePlan.translation?.frontmatter ?? filePlan.source.frontmatter ?? null;
-    // base frontmatter가 없으면 keys를 위해 frontmatter를 새로 만들지 않는다.
-    // 원문에 frontmatter가 없는데 번역 파일에 keys만 있는 frontmatter가
-    // 생기는 것을 방지한다.
+      filePlan.source.frontmatter ?? filePlan.translation?.frontmatter ?? null;
     const frontmatter =
       baseFrontmatter && cache.translatedKeys.length > 0
         ? withFrontmatterKeys(baseFrontmatter, cache.translatedKeys)
@@ -383,7 +382,21 @@ export class TranslationController {
       result.keys.length > 0 &&
       batch.translateKeys.length > 0;
     if (translatedKeysUpdated) {
-      cache.translatedKeys = normalizeKeys(result.keys ?? []);
+      // 증분 + 보존: 새로 번역된 키(result.keys)를 기존 번역 키에 병합한다.
+      // normalizeKeys가 중복을 제거하므로 안정적인 기존 키의 번역은 유지되고,
+      // 새 키의 번역만 추가된다. 전체를 재번역하지 않아 번역이 흔들리지 않는다.
+      cache.translatedKeys = normalizeKeys([
+        ...cache.translatedKeys,
+        ...(result.keys ?? [])
+      ]);
+      // 이번에 번역한 원본 키(batch.translateKeys == newKeys)를 기록해
+      // 다음 검사에서 재번역 대상에서 제외한다.
+      cache.translatedSourceKeys = [
+        ...new Set([
+          ...(cache.translatedSourceKeys ?? []),
+          ...batch.translateKeys
+        ])
+      ];
       cache.sourceKeys = extractKeys(
         filePlan.source,
         filePlan.sourcePath

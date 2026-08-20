@@ -10,6 +10,16 @@ const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const LIST_RE = /^\s*(?:[-+*]|\d+[.)])\s+/;
 const QUOTE_RE = /^\s*>\s?/;
 
+// 파서 진단 로깅. true로 바꾸면 frontmatter 감지·코드 펜스 짝 맞춤·
+// 블록 분리 결과를 콘솔에 출력한다. 소악마.md처럼 닫히지 않은 ``` 펜스가
+// 파일 끝까지 한 블록으로 삼키는 경우를 잡아낼 때 쓴다.
+const DEBUG = false;
+
+function debug(event: string, details: Record<string, unknown> = {}): void {
+  if (!DEBUG) return;
+  console.debug(`[Scriptorium markdown] ${event}`, details);
+}
+
 export function normalizeVaultPath(path: string): string {
   return path
     .replaceAll("\\", "/")
@@ -98,6 +108,9 @@ function splitFrontmatter(content: string): {
 } {
   const normalized = content.replace(/\r\n?/g, "\n");
   if (!normalized.startsWith("---\n")) {
+    debug("frontmatter: no leading ---, treating whole content as body", {
+      length: normalized.length
+    });
     return { frontmatter: null, body: normalized, bodyStartLine: 0 };
   }
 
@@ -107,6 +120,9 @@ function splitFrontmatter(content: string): {
   // 닫는 구분자 없는 것으로 취급해 본문 전체를 frontmatter 없이 해석했다.
   const closeIndex = normalized.indexOf("\n---", 3);
   if (closeIndex < 0) {
+    debug("frontmatter: leading --- but no closing ---, ignoring frontmatter", {
+      length: normalized.length
+    });
     return { frontmatter: null, body: normalized, bodyStartLine: 0 };
   }
   const afterClose = closeIndex + 4;
@@ -114,6 +130,9 @@ function splitFrontmatter(content: string): {
     afterClose < normalized.length &&
     normalized[afterClose] !== "\n"
   ) {
+    debug("frontmatter: closing --- not on its own line, ignoring frontmatter", {
+      snippet: normalized.slice(closeIndex, closeIndex + 20)
+    });
     return { frontmatter: null, body: normalized, bodyStartLine: 0 };
   }
 
@@ -209,6 +228,7 @@ export function parseMarkdown(content: string): ParsedMarkdown {
       const marker = fence[1]?.[0] ?? "`";
       const fenceLength = fence[1]?.length ?? 3;
       let end = index + 1;
+      let closed = false;
       while (end < lines.length) {
         const closing = (lines[end] ?? "").trimStart();
         if (
@@ -216,13 +236,25 @@ export function parseMarkdown(content: string): ParsedMarkdown {
           closing.replaceAll(marker, "").trim() === ""
         ) {
           end += 1;
+          closed = true;
           break;
         }
         end += 1;
       }
-      push("code", index, end);
-      index = end;
-      continue;
+      if (!closed) {
+        // 닫는 마커가 없으면 코드 블록으로 취급하지 않는다. 여는 펜스 줄을
+        // 일반 문단으로 두고 아래 paragraph 분기가 뒷줄을 정상 파싱하게 한다.
+        // 소악마.md처럼 RisuAI 매크로 안의 ``` 가 짝 없이 쓰인 경우, 펜스가
+        // EOF까지 삼키는 걸 막는다.
+        debug("code fence: no closing marker — treating fence line as plain text", {
+          openLine: index + 1,
+          marker: fence[1]
+        });
+      } else {
+        push("code", index, end);
+        index = end;
+        continue;
+      }
     }
 
     if (isTableStart(lines, index)) {
@@ -300,6 +332,23 @@ export function parseMarkdown(content: string): ParsedMarkdown {
     index = end;
   }
 
+  if (DEBUG) {
+    const kindCounts: Record<string, number> = {};
+    let largest: { kind: string; len: number; line: number } | null = null;
+    for (const block of blocks) {
+      kindCounts[block.kind] = (kindCounts[block.kind] ?? 0) + 1;
+      if (!largest || block.text.length > largest.len) {
+        largest = { kind: block.kind, len: block.text.length, line: block.startLine };
+      }
+    }
+    debug("parse done", {
+      totalBlocks: blocks.length,
+      kindCounts,
+      largestBlock: largest,
+      hasFrontmatter: !!frontmatter
+    });
+  }
+
   return { frontmatter, body, blocks };
 }
 
@@ -335,6 +384,64 @@ export function extractKeys(
       ? raw.split(",").map((key) => key.trim())
       : [fallback];
   return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+}
+
+/**
+ * frontmatter values에서 keys 필드만 뽑아 문자열 배열로 반환한다.
+ * keys가 배열이면 그대로, 문자열이면 쉼표 분리, 없으면 빈 배열.
+ * extractKeys와 달리 파일명 폴백을 붙이지 않아 "번역된 키"만 가져올 때 쓴다.
+ */
+export function keysFromFrontmatter(
+  frontmatter: MarkdownFrontmatter | null
+): string[] {
+  const raw = frontmatter?.values.keys;
+  const keys = Array.isArray(raw)
+    ? raw.map(String)
+    : typeof raw === "string"
+      ? raw.split(",").map((key) => key.trim())
+      : [];
+  return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
+}
+
+/**
+ * keys를 제외한 frontmatter 값 사본을 반환한다. 원본-번역본 간 비-키
+ * 메타데이터 동기화 여부(드리프트)를 비교할 때 사용한다.
+ */
+export function frontmatterValuesExcludingKeys(
+  frontmatter: MarkdownFrontmatter | null
+): Record<string, unknown> {
+  const values = { ...(frontmatter?.values ?? {}) };
+  delete values.keys;
+  return values;
+}
+
+/**
+ * 원문 frontmatter의 비-키 필드가 번역본과 다르면 동기화가 필요하다.
+ * keys는 번역 대상이므로 비교에서 제외한다. 원문에 frontmatter가 없으면
+ * 번역본 frontmatter에 동기화할 비-키 필드가 없으므로 false.
+ */
+export function frontmatterNeedsSync(
+  source: MarkdownFrontmatter | null,
+  translation: MarkdownFrontmatter | null
+): boolean {
+  if (!source) return false;
+  return (
+    JSON.stringify(frontmatterValuesExcludingKeys(source)) !==
+    JSON.stringify(frontmatterValuesExcludingKeys(translation))
+  );
+}
+
+/**
+ * 원문 frontmatter를 기준으로 비-키 필드를 그대로 두고, keys만 번역본이
+ * 가진 번역된 키로 교체한 새 frontmatter를 반환한다. 번역본에 keys가 없으면
+ * withFrontmatterKeys가 keys 필드를 제거한다(=번역 키 없음 상태).
+ */
+export function syncFrontmatterFromSource(
+  source: MarkdownFrontmatter,
+  translation: MarkdownFrontmatter | null
+): MarkdownFrontmatter {
+  // source는 null이 아니므로 withFrontmatterKeys도 null을 반환하지 않는다.
+  return withFrontmatterKeys(source, keysFromFrontmatter(translation))!;
 }
 
 /**

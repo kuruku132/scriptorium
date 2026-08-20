@@ -6,7 +6,8 @@ import {
 import {
   findProjectForPath,
   listSourceFiles,
-  translationPathFor
+  translationPathFor,
+  writeVaultFile
 } from "../modules/project";
 import {
   adoptManualTranslations,
@@ -16,7 +17,12 @@ import {
   planFileChanges,
   reconcileChangeSelections
 } from "../modules/translation/planner";
-import { parseMarkdown, renderMarkdown } from "../shared/markdown";
+import {
+  frontmatterNeedsSync,
+  parseMarkdown,
+  renderMarkdown,
+  syncFrontmatterFromSource
+} from "../shared/markdown";
 import type {
   FileChangePlan,
   ProjectCache,
@@ -42,6 +48,7 @@ export interface ProjectRuntimeDeps {
   /** 캐시 항목이 실제로 존재해 삭제되었으면 true를 반환한다(debug용 hadCache). */
   invalidateDocumentProject(projectId: string): boolean;
   isVaultScanSuppressed(): boolean;
+  withVaultScanSuppressed<T>(action: () => Promise<T>): Promise<T>;
   debug(event: string, details?: Record<string, unknown>): void;
 }
 
@@ -211,7 +218,7 @@ export class ProjectRuntime {
       const source = parseMarkdown(await this.deps.app.vault.cachedRead(sourceFile));
       const translationPath = translationPathFor(project, sourceFile.path);
       const translationFile = this.deps.app.vault.getFileByPath(translationPath);
-      const translation = translationFile
+      let translation = translationFile
         ? parseMarkdown(await this.deps.app.vault.cachedRead(translationFile))
         : null;
       let cache = projectCache.files[sourceFile.path];
@@ -272,6 +279,27 @@ export class ProjectRuntime {
         renderedTranslation !== cache.lastSuccessfulTranslation
       ) {
         cache.lastSuccessfulTranslation = renderedTranslation;
+        dataChanged = true;
+      }
+      // 원문 frontmatter의 비-키 필드(title/secondkey/selective/...)가
+      // 번역본과 다르면, 번역본 frontmatter를 원문 기준으로 덮어쓴다.
+      // keys는 번역본이 가진 번역된 키를 유지한다. 본문 블록은 건드리지
+      // 않으므로 plan의 변경/충돌 판정에 영향을 주지 않는다.
+      if (
+        translation &&
+        source.frontmatter &&
+        frontmatterNeedsSync(source.frontmatter, translation.frontmatter)
+      ) {
+        const syncedFm = syncFrontmatterFromSource(
+          source.frontmatter,
+          translation.frontmatter
+        );
+        const syncedContent = renderMarkdown(syncedFm, translation.blocks);
+        await this.deps.withVaultScanSuppressed(() =>
+          writeVaultFile(this.deps.app, translationPath, syncedContent)
+        );
+        translation = parseMarkdown(syncedContent);
+        cache.lastSuccessfulTranslation = syncedContent;
         dataChanged = true;
       }
       filePlans.push(plan);

@@ -80,7 +80,7 @@ export class CbsPreviewView extends ItemView {
       text: "RisuAI와 다를 수 있습니다. RisuAI 내에서 다시 확인하세요."
     });
     this.bodyEl = contentEl.createDiv({
-      cls: "scriptorium-cbs-preview-body markdown-rendered"
+      cls: "scriptorium-cbs-preview-body markdown-rendered markdown-reading-view"
     });
   }
 

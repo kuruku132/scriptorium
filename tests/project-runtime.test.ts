@@ -89,6 +89,7 @@ function makeDeps(): DepsHandle {
     cancelTranslation: () => undefined,
     invalidateDocumentProject: () => false,
     isVaultScanSuppressed: () => false,
+    withVaultScanSuppressed: async <T>(action: () => Promise<T>) => action(),
     debug: () => undefined
   };
   return { deps, reads, refresh, getMarkdownFiles };

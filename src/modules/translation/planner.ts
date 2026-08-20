@@ -318,8 +318,12 @@ export function planFileChanges(options: {
   }
 
   const currentKeys = extractKeys(source, basename);
-  const metadataChanged =
-    JSON.stringify(currentKeys) !== JSON.stringify(cache.sourceKeys);
+  // 이미 번역된 원본 키는 재번역하지 않는다(증분 + 보존). 새로 추가된
+  // 키(newKeys)가 있을 때만 메타데이터(키) 변경을 발생시킨다. 키 삭제만
+  // 있을 때는 번역이 필요 없으므로 변경을 만들지 않는다.
+  const translatedSourceSet = new Set(cache.translatedSourceKeys ?? []);
+  const newKeys = currentKeys.filter((key) => !translatedSourceSet.has(key));
+  const metadataChanged = newKeys.length > 0;
   if (metadataChanged) {
     changes.push(
       buildChange(
@@ -331,7 +335,7 @@ export function planFileChanges(options: {
         null,
         selectedChangeIds,
         "pending",
-        `keys: ${currentKeys.join(", ")}`
+        `keys: ${newKeys.join(", ")}`
       )
     );
   }
@@ -384,7 +388,8 @@ export function planFileChanges(options: {
       ...(cache.pendingTranslations ?? {})
     },
     pendingTranslationIds: Object.keys(cache.pendingTranslations ?? {}),
-    metadataChanged
+    metadataChanged,
+    newKeys
   };
 }
 
@@ -442,16 +447,7 @@ export function createTranslationBatches(
         .map((block) =>
           toRequestBlock(change, block, file.currentTranslations)
         );
-      const keys =
-        change.kind === "metadata"
-          ? extractKeys(
-              file.source,
-              file.sourcePath
-                .split("/")
-                .pop()
-                ?.replace(/\.md$/i, "") ?? ""
-            )
-          : [];
+      const keys = change.kind === "metadata" ? file.newKeys : [];
       const pieces: Array<{
         block: TranslationRequestBlock | null;
         characters: number;

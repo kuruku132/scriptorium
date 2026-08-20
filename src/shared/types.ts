@@ -127,6 +127,9 @@ export interface FileCache {
   sourceFrontmatterHash: string;
   sourceKeys: string[];
   translatedKeys: string[];
+  // 이미 번역을 완료한 원본 키 집합. 증분 키 번역에서 재번역을 피하고
+  // 새로 추가된 키만 번역 대상으로 판별할 때 사용한다.
+  translatedSourceKeys?: string[];
   pendingTranslations?: Record<string, string>;
   acceptedOrphanHash?: string;
   lastSuccessfulTranslation: string | null;
@@ -169,6 +172,9 @@ export interface FileChangePlan {
   currentTranslations: Record<string, string>;
   pendingTranslationIds: string[];
   metadataChanged: boolean;
+  // 이번 검사에서 새로 번역해야 할 원본 키(이미 번역된 키 제외).
+  // 메타데이터(키) 변경 배치의 translateKeys로 쓰인다.
+  newKeys: string[];
 }
 
 export interface ProjectChangePlan {

@@ -113,7 +113,8 @@ describe("TranslationController", () => {
           conflicts: [conflict],
           currentTranslations: {},
           pendingTranslationIds: [],
-          metadataChanged: false
+          metadataChanged: false,
+          newKeys: []
         }
       ],
       changeCount: 0,

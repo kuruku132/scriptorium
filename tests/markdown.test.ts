@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   extractKeys,
+  frontmatterNeedsSync,
+  keysFromFrontmatter,
   matchesGlob,
   normalizeKeys,
   parseMarkdown,
   replaceFrontmatterKeys,
+  syncFrontmatterFromSource,
   withFrontmatterKeys
 } from "../src/shared/markdown";
 
@@ -80,6 +83,18 @@ const value = 1;
     expect(matchesGlob("notes/a.md", "notes/*.md")).toBe(true);
     expect(matchesGlob("notes/deep/a.md", "notes/*.md")).toBe(false);
   });
+
+  it("treats an unclosed code fence as plain text instead of swallowing to EOF", () => {
+    const parsed = parseMarkdown("intro\n```\n# Heading\n- item\n");
+    expect(parsed.blocks.map((block) => block.kind)).toEqual([
+      "paragraph",
+      "paragraph",
+      "heading",
+      "list"
+    ]);
+    // 여는 펜스 줄 자체는 일반 문단으로 남는다.
+    expect(parsed.blocks[1]?.text).toBe("```");
+  });
 });
 
 describe("normalizeKeys", () => {
@@ -153,5 +168,61 @@ describe("withFrontmatterKeys", () => {
 
   it("returns null when there is no frontmatter and no keys", () => {
     expect(withFrontmatterKeys(null, [])).toBeNull();
+  });
+});
+
+describe("frontmatter metadata sync", () => {
+  const source = parseMarkdown(
+    "---\ntitle: Hero\ninsertorder: 42\nkeys:\n  - Sword\n---\nBody"
+  ).frontmatter!;
+
+  it("detects drift in non-key fields between source and translation", () => {
+    const matched = parseMarkdown(
+      "---\ntitle: Hero\ninsertorder: 42\nkeys:\n  - 검\n---\n본문"
+    ).frontmatter!;
+    // keys만 다를 때는 동기화 불필요.
+    expect(frontmatterNeedsSync(source, matched)).toBe(false);
+
+    const drifted = parseMarkdown(
+      "---\ntitle: Hero(번역)\ninsertorder: 42\nkeys:\n  - 검\n---\n본문"
+    ).frontmatter!;
+    // 비-키 필드(title)가 다르면 동기화 필요.
+    expect(frontmatterNeedsSync(source, drifted)).toBe(true);
+
+    // 번역본에 frontmatter가 없어도 원문 비-키 필드가 있으면 동기화 필요.
+    expect(frontmatterNeedsSync(source, null)).toBe(true);
+    // 원문에 frontmatter가 없으면 동기화 불필요.
+    expect(frontmatterNeedsSync(null, matched)).toBe(false);
+  });
+
+  it("syncs non-key fields from source while keeping translation keys", () => {
+    const translation = parseMarkdown(
+      "---\ntitle: Hero(번역)\ninsertorder: 7\nkeys:\n  - 검\n---\n본문"
+    ).frontmatter!;
+    const synced = syncFrontmatterFromSource(source, translation);
+    // 비-키 필드는 원문 기준.
+    expect(synced.values.title).toBe("Hero");
+    expect(synced.values.insertorder).toBe(42);
+    // keys는 번역본의 번역된 키.
+    expect(synced.values.keys).toEqual(["검"]);
+  });
+
+  it("drops keys when the translation has no keys", () => {
+    const translation = parseMarkdown(
+      "---\ntitle: Hero(번역)\ninsertorder: 7\n---\n본문"
+    ).frontmatter!;
+    const synced = syncFrontmatterFromSource(source, translation);
+    expect(synced.values.title).toBe("Hero");
+    expect("keys" in synced.values).toBe(false);
+  });
+
+  it("keysFromFrontmatter reads only keys without basename fallback", () => {
+    const translation = parseMarkdown(
+      "---\ntitle: Hero\nkeys:\n  - 검\n---\n본문"
+    ).frontmatter!;
+    expect(keysFromFrontmatter(translation)).toEqual(["검"]);
+    expect(keysFromFrontmatter(null)).toEqual([]);
+    const inline = parseMarkdown("---\nkeys: a, b\n---\nx").frontmatter!;
+    expect(keysFromFrontmatter(inline)).toEqual(["a", "b"]);
   });
 });

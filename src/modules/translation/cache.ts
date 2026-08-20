@@ -132,6 +132,12 @@ export function createInitialFileCache(
       sameShape && translatedKeys.length > 0
         ? extractKeys(source, basename)
         : [],
+    // 번역 파일에 이미 번역된 키가 있으면 해당 원본 키들은 이미 번역된
+    // 것으로 간주해 재번역을 피한다.
+    translatedSourceKeys:
+      sameShape && translatedKeys.length > 0
+        ? extractKeys(source, basename)
+        : [],
     translatedKeys,
     pendingTranslations: {},
     lastSuccessfulTranslation: translation

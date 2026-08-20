@@ -31,6 +31,9 @@ function plan(
     "file"
   );
   cache.sourceKeys = extractKeys(previous, "file");
+  // 안정 상태(이미 키가 번역된 기준)를 시뮬레이션하기 위해 현재 원본 키를
+  // 이미 번역된 것으로 표시해 증분 검출에서 재번역 대상이 되지 않게 한다.
+  cache.translatedSourceKeys = cache.sourceKeys;
   return planFileChanges({
     sourcePath: "project/file.md",
     translationPath: "project/translate/file.md",
@@ -243,6 +246,65 @@ describe("paragraph diff", () => {
       "Sword",
       "Mana"
     ]);
+  });
+
+  it("only sends newly added keys for incremental key translation", () => {
+    // 이미 Sword는 번역된 상태. 원문에 새 키 Bow가 추가되면 Bow만 번역 대상.
+    const previous = parseMarkdown("---\nkeys:\n  - Sword\n---\nBody");
+    const cache = createInitialFileCache(
+      "project/file.md",
+      "project/translate/file.md",
+      previous,
+      parseMarkdown("---\nkeys:\n  - 검\n---\n본문"),
+      "file"
+    );
+    // createInitialFileCache는 번역 파일에 keys가 있으면 원본 키 전체를
+    // 이미 번역된 것으로 표시한다.
+    expect(cache.translatedSourceKeys).toEqual(["Sword"]);
+    expect(cache.translatedKeys).toEqual(["검"]);
+
+    const plan = planFileChanges({
+      sourcePath: "project/file.md",
+      translationPath: "project/translate/file.md",
+      basename: "file",
+      source: parseMarkdown("---\nkeys:\n  - Sword\n  - Bow\n---\nBody"),
+      translation: parseMarkdown("---\nkeys:\n  - 검\n---\n본문"),
+      cache,
+      selectedChangeIds: new Set()
+    });
+    expect(plan.newKeys).toEqual(["Bow"]);
+    const metadata = plan.changes.find((change) => change.kind === "metadata");
+    expect(metadata).toBeDefined();
+    expect(metadata?.message).toBe("keys: Bow");
+    reconcileChangeSelections([plan], [], []);
+    const batches = createTranslationBatches([plan]);
+    expect(batches.flatMap((batch) => batch.translateKeys)).toEqual(["Bow"]);
+  });
+
+  it("does not emit a metadata change when a key is only removed", () => {
+    const previous = parseMarkdown("---\nkeys:\n  - Sword\n  - Bow\n---\nBody");
+    const cache = createInitialFileCache(
+      "project/file.md",
+      "project/translate/file.md",
+      previous,
+      parseMarkdown("---\nkeys:\n  - 검\n  - 활\n---\n본문"),
+      "file"
+    );
+    expect(cache.translatedSourceKeys).toEqual(["Sword", "Bow"]);
+    const plan = planFileChanges({
+      sourcePath: "project/file.md",
+      translationPath: "project/translate/file.md",
+      basename: "file",
+      // Bow가 삭제됨. 새 키는 없음.
+      source: parseMarkdown("---\nkeys:\n  - Sword\n---\nBody"),
+      translation: parseMarkdown("---\nkeys:\n  - 검\n  - 활\n---\n본문"),
+      cache,
+      selectedChangeIds: new Set()
+    });
+    expect(plan.newKeys).toEqual([]);
+    expect(plan.changes.some((change) => change.kind === "metadata")).toBe(
+      false
+    );
   });
 });
 
