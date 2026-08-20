@@ -260,197 +260,189 @@ function resolveNested(arg: string, ctx: EvalContext): string {
 function mathEval(expr: string, ctx: EvalContext): string {
   // 중첩 CBS 를 먼저 값으로 치환한 뒤 수식 평가. {{? {{getglobalvar::X}}>=1}} 같은
   // 표현식이 안쪽부터 해석되도록 한다(resolveNested 는 깊이 인지 파서 사용).
+  // {{length::{{getglobalvar::tags}}}} 처럼 중첩된 CBS 도 깊이 인지 파서가
+  // 정확히 치환하므로 수식 평가 시점에 리터럴 { / {{ / }} 가 남지 않는다.
   const resolved = resolveNested(expr, ctx);
-  try {
-    const tokens = tokenizeMath(resolved, ctx);
-    const { value, pos } = parseMath(tokens, 0);
-    if (pos !== tokens.length) {
-      ctx.errors.push(`수식 파싱 잔여: ${resolved}`);
-      return resolved;
-    }
-    return value;
-  } catch (error) {
-    ctx.errors.push(error instanceof Error ? error.message : String(error));
-    return resolved;
+  // 미해결 중첩 {{...}} 가 남아 있다면 런타임 의존 패스스루 자리(예:
+  // {{previous_chat_log::...}})이다. 리터럴 { } 가 수식 평가기에 들어가
+  // 평가가 꼬이는 것을 막기 위해 원문을 그대로 반환한다(RisuAI 런타임이 채울 자리).
+  // Scriptorium 에서 로컬로 재현할 수 없는 값만 이 경로를 탄다.
+  if (resolved.includes("{{")) {
+    return `{{?${expr}}}`;
   }
+  // RisuAI calcString 호환 평가. 빈 수식·빈 피연산자는 0 으로 강제되며
+  // 괄호 불일치·미지원 토큰은 오류가 아닌 강제 처리된다. 따라서 유효한
+  // RisuAI 수식(빈 런타임 값을 가진 경우 포함)에 대해
+  // "Unexpected math token" / "Unclosed parenthesis" /
+  // "수식에 허용되지 않은 문자" 오류를 내지 않는다.
+  const result = calcString(resolved, ctx);
+  return String(result);
 }
 
-interface MathToken {
-  type: "num" | "op" | "lparen" | "rparen";
-  value: string;
-}
+// === RisuAI calcString 호환 포트 ==========================================
+// upstream RisuAI src/ts/process/infunctions.ts 의 calcString / toRPN /
+// calculateRPN / executeRPNCalculation 을 충실히 포팅. RisuAI 의 수식 문법은
+// 빈 피연산자를 0 으로 끼워 넣고(=1 → 0=1, >0 → 0>0), 미지원 토큰을 조용히
+// 버리며, 괄호 불일치를 오류가 아닌 강제 처리로 다룬다. Scriptorium 의 기존
+// 재귀 하강 파서가 계속 RisuAI 동작에서 벗어나던 것을 원본 알고리즘으로 대체.
 
-function tokenizeMath(s: string, ctx: EvalContext): MathToken[] {
-  const tokens: MathToken[] = [];
-  let i = 0;
-  while (i < s.length) {
-    const c = s.charAt(i);
-    if (c === " " || c === "\t") {
-      i += 1;
-      continue;
+// RisuAI toRPN 의 연산자 집합(정규화 후 단일 문자). precedence/associativity
+// 도 원본과 동일. 단일 '=' 은 동등, 단일 '&'/'|' 은 논리 AND/OR.
+const RPN_OPERATORS: Record<string, { precedence: number; associativity: "Left" | "Right" }> = {
+  "+": { precedence: 2, associativity: "Left" },
+  "-": { precedence: 2, associativity: "Left" },
+  "*": { precedence: 3, associativity: "Left" },
+  "/": { precedence: 3, associativity: "Left" },
+  "^": { precedence: 4, associativity: "Left" },
+  "%": { precedence: 3, associativity: "Left" },
+  "<": { precedence: 1, associativity: "Left" },
+  ">": { precedence: 1, associativity: "Left" },
+  "|": { precedence: 1, associativity: "Left" },
+  "&": { precedence: 1, associativity: "Left" },
+  "≤": { precedence: 1, associativity: "Left" },
+  "≥": { precedence: 1, associativity: "Left" },
+  "=": { precedence: 1, associativity: "Left" },
+  "≠": { precedence: 1, associativity: "Left" },
+  "!": { precedence: 5, associativity: "Right" }
+};
+const RPN_OP_KEYS = Object.keys(RPN_OPERATORS);
+
+// RisuAI toRPN: 중위식 → RPN(shunting-yard). 핵심 호환 동작은 연산자 앞에
+// 피연산자가 없으면(lastToken === '') '0' 을 끼워 넣는 것으로, 빈 런타임 값이
+// 만든 "=1" / ">0" / "()=1" 같은 식을 "0=1" / "0>0" 으로 정규화한다.
+// 숫자가 아닌 토큰은 아래 forEach 의 parseFloat 판정에서 outputQueue 에 들어가지
+// 않고 연산자도 아니므로 조용히 무시된다(calculateRPN 과 동일).
+function toRPN(expression: string): string {
+  const s = expression.replace(/\s+/g, "");
+  const expression2: string[] = [];
+  let lastToken = "";
+  for (let i = 0; i < s.length; i++) {
+    const char = s.charAt(i);
+    // 단항 마이너스: 식 시작·연산자·'(' 직후에는 lastToken 에 부호로 누적.
+    if (char === "-" && (i === 0 || RPN_OP_KEYS.includes(s.charAt(i - 1)) || s.charAt(i - 1) === "(")) {
+      lastToken += char;
+    } else if (RPN_OP_KEYS.includes(char)) {
+      // 빈 피연산자 자리 강제: 연산자 앞에 값이 없으면 0 을 끼워 넣는다.
+      expression2.push(lastToken !== "" ? lastToken : "0");
+      lastToken = "";
+      expression2.push(char);
+    } else {
+      lastToken += char;
     }
-    if (c === "(") {
-      tokens.push({ type: "lparen", value: c });
-      i += 1;
-      continue;
-    }
-    if (c === ")") {
-      tokens.push({ type: "rparen", value: c });
-      i += 1;
-      continue;
-    }
-    // RisuAI 수식 변수 토큰: $name → getChatVar, @name → getGlobalChatVar.
-    // calcString(executeRPNCalculation) 의 $/@ 치환과 동일.
-    if (c === "$" || c === "@") {
-      let j = i + 1;
-      let name = "";
-      while (j < s.length && /[A-Za-z0-9_]/.test(s.charAt(j))) {
-        name += s.charAt(j);
-        j += 1;
+  }
+  // 식 끝에 피연산자가 없어도 0 으로 채운다(후행 연산자 보정).
+  expression2.push(lastToken !== "" ? lastToken : "0");
+
+  let outputQueue = "";
+  const operatorStack: string[] = [];
+  for (const token of expression2) {
+    if (parseFloat(token) || token === "0") {
+      outputQueue += token + " ";
+    } else if (RPN_OP_KEYS.includes(token)) {
+      const tokOp = RPN_OPERATORS[token]!;
+      while (operatorStack.length > 0) {
+        const topOp = RPN_OPERATORS[operatorStack[operatorStack.length - 1] as string]!;
+        const leftAssoc = tokOp.associativity === "Left" && tokOp.precedence <= topOp.precedence;
+        const rightAssoc = tokOp.associativity === "Right" && tokOp.precedence < topOp.precedence;
+        if (!leftAssoc && !rightAssoc) break;
+        outputQueue += (operatorStack.pop() as string) + " ";
       }
-      const raw =
-        c === "$"
-          ? ctx.chatVars[name] ?? ""
-          : name.startsWith("toggle_")
-            ? ctx.toggles[name.slice("toggle_".length)]
-              ? "1"
-              : "0"
-            : ctx.chatVars[name] ?? "";
-      const n = Number(raw);
-      tokens.push({ type: "num", value: Number.isFinite(n) ? String(n) : "0" });
-      i = j;
-      continue;
+      operatorStack.push(token);
     }
-    if (/[0-9.]/.test(c)) {
-      let num = "";
-      while (i < s.length && /[0-9.]/.test(s.charAt(i))) {
-        num += s.charAt(i);
-        i += 1;
+    // 그 외 토큰(숫자 아닌 식별자 등)은 RisuAI 처럼 조용히 무시.
+  }
+  while (operatorStack.length > 0) {
+    outputQueue += (operatorStack.pop() as string) + " ";
+  }
+  return outputQueue.trim();
+}
+
+// RisuAI calculateRPN: RPN 식을 스택으로 평가. 비교·동등·논리 연산은 1/0(또는
+// JS 단축 평가의 실숫값)을 반환한다. 피연산자 부족 시 undefined 가 되어도
+// RisuAI 원본과 동일하게 동작(산술 → NaN, 비교 → false → 0).
+function calculateRPN(expression: string): number {
+  const stack: number[] = [];
+  for (const token of expression.split(" ")) {
+    if (parseFloat(token) || token === "0") {
+      stack.push(parseFloat(token));
+    } else {
+      const b = stack.pop() as number | undefined;
+      const a = stack.pop() as number | undefined;
+      switch (token) {
+        case "+": stack.push((a as number) + (b as number)); break;
+        case "-": stack.push((a as number) - (b as number)); break;
+        case "*": stack.push((a as number) * (b as number)); break;
+        case "/": stack.push((a as number) / (b as number)); break;
+        case "^": stack.push((a as number) ** (b as number)); break;
+        case "%": stack.push((a as number) % (b as number)); break;
+        case "<": stack.push((a as number) < (b as number) ? 1 : 0); break;
+        case ">": stack.push((a as number) > (b as number) ? 1 : 0); break;
+        case "|": stack.push((a as number) || (b as number)); break;
+        case "&": stack.push((a as number) && (b as number)); break;
+        case "≤": stack.push((a as number) <= (b as number) ? 1 : 0); break;
+        case "≥": stack.push((a as number) >= (b as number) ? 1 : 0); break;
+        case "=": stack.push((a as number) === (b as number) ? 1 : 0); break;
+        case "≠": stack.push((a as number) !== (b as number) ? 1 : 0); break;
+        case "!": stack.push(b ? 0 : 1); break;
+        default: break; // 미지원 토큰은 RisuAI 처럼 조용히 무시
       }
-      tokens.push({ type: "num", value: num });
-      continue;
     }
-    const two = s.slice(i, i + 2);
-    if (two === "==" || two === "!=" || two === ">=" || two === "<=" || two === "&&" || two === "||") {
-      tokens.push({ type: "op", value: two });
-      i += 2;
-      continue;
+  }
+  if (stack.length === 0) return 0;
+  return stack.pop() as number;
+}
+
+// RisuAI executeRPNCalculation: $/@ 변수 치환 → 다중 문자 연산자 정규화 →
+// null→0 → toRPN → calculateRPN. $name 은 getChatVar, @name 은 getGlobalChatVar
+// 이며 Scriptorium 패널에서는 @toggle_NAME 을 토글 NAME 에 매핑한다.
+// NaN 은 "0" 으로 강제한다.
+function executeRPNCalculation(text: string, ctx: EvalContext): number {
+  const substituted = text
+    .replace(/\$([a-zA-Z0-9_]+)/g, (_, p1: string) => {
+      const v = ctx.chatVars[p1] ?? "";
+      const parsed = parseFloat(v);
+      return isNaN(parsed) ? "0" : parsed.toString();
+    })
+    .replace(/@([a-zA-Z0-9_]+)/g, (_, p1: string) => {
+      const raw = p1.startsWith("toggle_")
+        ? ctx.toggles[p1.slice("toggle_".length)]
+          ? "1"
+          : "0"
+        : ctx.chatVars[p1] ?? "";
+      const parsed = parseFloat(raw);
+      return isNaN(parsed) ? "0" : parsed.toString();
+    })
+    .replace(/&&/g, "&")
+    .replace(/\|\|/g, "|")
+    .replace(/<=/g, "≤")
+    .replace(/>=/g, "≥")
+    .replace(/==/g, "=")
+    .replace(/!=/g, "≠")
+    .replace(/null/gi, "0");
+  return calculateRPN(toRPN(substituted));
+}
+
+// RisuAI calcString: 괄호를 깊이 스택으로 처리. '(' → 새 컨텍스트 push,
+// ')' (깊이>1) → 팝하여 executeRPNCalculation 결과를 상위 컨텍스트에 붙인다.
+// 괄호 불일치는 오류가 아니다: 여는 '(' 가 남으면 깊이별 내용을 모두 합쳐
+// 평가하고, 닫는 ')' 가 최상위에 남으면 리터럴 문자로 toRPN 에서 무시된다.
+// 따라서 "({{getglobalvar::missing}})=1" → "()=1" 도 0=1 처럼 정상 평가된다.
+function calcString(text: string, ctx: EvalContext): number {
+  const depthText: string[] = [""];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (ch === "(") {
+      depthText.push("");
+    } else if (ch === ")" && depthText.length > 1) {
+      const result = executeRPNCalculation(depthText.pop() as string, ctx);
+      const top = depthText.length - 1;
+      depthText[top] = (depthText[top] ?? "") + result;
+    } else {
+      const top = depthText.length - 1;
+      depthText[top] = (depthText[top] ?? "") + ch;
     }
-    if ("+-*/%^<>!".includes(c)) {
-      tokens.push({ type: "op", value: c });
-      i += 1;
-      continue;
-    }
-    throw new Error(`수식에 허용되지 않은 문자: ${c}`);
   }
-  return tokens;
-}
-
-// Shunting-yard 대신 재귀 하강(우선순위: 비교 < 덧셈 < 곱셈 < 거듭제곱 < 단항).
-function parseMath(tokens: MathToken[], start: number): { value: string; pos: number } {
-  let { value, pos } = parseMathCompare(tokens, start);
-  return { value, pos };
-}
-
-// 비교·논리 연산은 RisuAI calcString 과 동일하게 우선순위 1(가장 낮음).
-// == != < > <= >= && || 를 한 단계에서 좌결합 처리한다.
-function parseMathCompare(tokens: MathToken[], start: number): { value: string; pos: number } {
-  let { value: left, pos } = parseMathAdd(tokens, start);
-  while (
-    tokens[pos]?.type === "op" &&
-    ["==", "!=", ">", "<", ">=", "<=", "&&", "||"].includes(tokens[pos]?.value ?? "")
-  ) {
-    const op = tokens[pos]?.value ?? "";
-    pos += 1;
-    const right = parseMathAdd(tokens, pos);
-    left = applyMathOp(op, left, right.value);
-    pos = right.pos;
-  }
-  return { value: left, pos };
-}
-
-function parseMathAdd(tokens: MathToken[], start: number): { value: string; pos: number } {
-  let { value: left, pos } = parseMathMul(tokens, start);
-  while (tokens[pos]?.type === "op" && (tokens[pos]?.value === "+" || tokens[pos]?.value === "-")) {
-    const op = tokens[pos]?.value ?? "";
-    pos += 1;
-    const right = parseMathMul(tokens, pos);
-    left = applyMathOp(op, left, right.value);
-    pos = right.pos;
-  }
-  return { value: left, pos };
-}
-
-function parseMathMul(tokens: MathToken[], start: number): { value: string; pos: number } {
-  let { value: left, pos } = parseMathPow(tokens, start);
-  while (tokens[pos]?.type === "op" && (tokens[pos]?.value === "*" || tokens[pos]?.value === "/" || tokens[pos]?.value === "%")) {
-    const op = tokens[pos]?.value ?? "";
-    pos += 1;
-    const right = parseMathPow(tokens, pos);
-    left = applyMathOp(op, left, right.value);
-    pos = right.pos;
-  }
-  return { value: left, pos };
-}
-
-function parseMathPow(tokens: MathToken[], start: number): { value: string; pos: number } {
-  let { value: left, pos } = parseMathUnary(tokens, start);
-  if (tokens[pos]?.type === "op" && tokens[pos]?.value === "^") {
-    pos += 1;
-    const right = parseMathPow(tokens, pos); // 우결합
-    left = applyMathOp("^", left, right.value);
-    pos = right.pos;
-  }
-  return { value: left, pos };
-}
-
-function parseMathUnary(tokens: MathToken[], start: number): { value: string; pos: number } {
-  // 단항 부정(RisuAI calcString 의 '!' 연산자): 0이면 1, 아니면 0.
-  if (tokens[start]?.type === "op" && tokens[start]?.value === "!") {
-    const inner = parseMathUnary(tokens, start + 1);
-    return { value: String(toNumber(inner.value) === 0 ? 1 : 0), pos: inner.pos };
-  }
-  if (tokens[start]?.type === "op" && tokens[start]?.value === "-") {
-    const inner = parseMathUnary(tokens, start + 1);
-    return { value: String(-toNumber(inner.value)), pos: inner.pos };
-  }
-  return parseMathPrimary(tokens, start);
-}
-
-function parseMathPrimary(tokens: MathToken[], start: number): { value: string; pos: number } {
-  const t = tokens[start];
-  if (!t) throw new Error("수식이 예기치 않게 끝남");
-  if (t.type === "num") return { value: t.value, pos: start + 1 };
-  if (t.type === "lparen") {
-    const inner = parseMathCompare(tokens, start + 1);
-    if (tokens[inner.pos]?.type !== "rparen") throw new Error("괄호가 닫히지 않음");
-    return { value: inner.value, pos: inner.pos + 1 };
-  }
-  throw new Error(`수식 예기치 않은 토큰: ${t.value}`);
-}
-
-// RisuAI calcString(calculateRPN) 호환: 비교·논리 연산은 1/0(숫자)을 반환하고
-// 산술 연산은 parseFloat 기반 실수 연산이다. 결과는 항상 문자열.
-function applyMathOp(op: string, a: string, b: string): string {
-  const x = toNumber(a);
-  const y = toNumber(b);
-  switch (op) {
-    case "==": return String(x === y ? 1 : 0);
-    case "!=": return String(x !== y ? 1 : 0);
-    case ">": return String(x > y ? 1 : 0);
-    case "<": return String(x < y ? 1 : 0);
-    case ">=": return String(x >= y ? 1 : 0);
-    case "<=": return String(x <= y ? 1 : 0);
-    case "&&": return String(x !== 0 && y !== 0 ? 1 : 0);
-    case "||": return String(x !== 0 || y !== 0 ? 1 : 0);
-    case "+": return String(x + y);
-    case "-": return String(x - y);
-    case "*": return String(x * y);
-    case "/": return String(x / y);
-    case "%": return String(x % y);
-    case "^": return String(Math.pow(x, y));
-    default: return a;
-  }
+  return executeRPNCalculation(depthText.join(""), ctx);
 }
 
 // === 단일 플레이스홀더 =====================================================

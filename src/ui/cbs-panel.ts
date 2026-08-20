@@ -11,6 +11,11 @@ export const CBS_PANEL_VIEW_TYPE = "scriptorium-cbs-panel";
 export interface CbsPanelHost {
   getActiveEditorText(): string | null;
   getActiveFilePath(): string | null;
+  // 기억된 CBS 소스(마지막으로 실제 선택된 Markdown 문서). 포커스 변화에도
+  // 비워지지 않는다. 패널·프리뷰 양쪽이 공유한다.
+  getCbsSourcePath(): string | null;
+  getCbsSourceText(path: string): Promise<string | null>;
+  getCbsSourceTextSync(path: string): string | null;
   getCbsTestValues(path: string): CbsTestValues;
   getCbsMockMeta(): CbsMockMeta;
   setCbsChatVar(path: string, name: string, value: string): void;
@@ -92,7 +97,10 @@ export class CbsPanelView extends ItemView {
   }
 
   private onActiveLeafChange(leaf: WorkspaceLeaf | null): void {
-    const path = this.host.getActiveFilePath();
+    // 기억된 CBS 소스가 바뀐 경우(다른 Markdown 문서를 실제로 열었을 때)만
+    // 전체 재렌더. 비-Markdown 리프(사이드바/플러그인/CBS 프리뷰)로 포커스가
+    // 옮겨가면 소스는 유지되므로 watchedPath 와 같아 재렌더하지 않는다.
+    const path = this.host.getCbsSourcePath();
     if (path !== this.watchedPath) {
       this.render();
       return;
@@ -105,7 +113,7 @@ export class CbsPanelView extends ItemView {
   }
 
   private onFileOpen(): void {
-    const path = this.host.getActiveFilePath();
+    const path = this.host.getCbsSourcePath();
     if (path !== this.watchedPath) {
       this.render();
     }
@@ -188,10 +196,17 @@ export class CbsPanelView extends ItemView {
 
   // 에디터 원문 변화를 프리뷰/변수 목록에 반영.
   // 변수 구성이 바뀐 경우에만 전체 재렌더(포커스는 보존), 그 외엔 프리뷰만 갱신.
-  private syncFromEditor(): void {
-    const path = this.host.getActiveFilePath();
-    const text = this.host.getActiveEditorText();
-    if (!path || text === null) {
+  // 소스는 기억된 Markdown 문서(포커스 변화에 비워지지 않음).
+  private async syncFromEditor(): Promise<void> {
+    const path = this.host.getCbsSourcePath();
+    if (!path) {
+      if (path !== this.watchedPath) this.render();
+      return;
+    }
+    let text: string | null = this.host.getCbsSourceTextSync(path);
+    if (text === null) text = await this.host.getCbsSourceText(path);
+    if (text === null) {
+      // 기억된 파일을 읽을 수 없으면(삭제 등) 전체 재렌더로 빈 상태 처리.
       if (path !== this.watchedPath) this.render();
       return;
     }
@@ -221,14 +236,17 @@ export class CbsPanelView extends ItemView {
     this.render();
   }
 
-  private render(): void {
+  private async render(): Promise<void> {
     const focus = this.captureFocus();
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("scriptorium-cbs-panel");
 
-    const path = this.host.getActiveFilePath();
-    const text = this.host.getActiveEditorText();
+    // 소스는 기억된 Markdown 문서. 에디터가 열려있으면 동기 판독, 아니면
+    // 볼트에서 비동기로 읽는다(포커스가 에디터를 떠나도 소스가 사라지지 않음).
+    const path = this.host.getCbsSourcePath();
+    let text: string | null = path ? this.host.getCbsSourceTextSync(path) : null;
+    if (text === null && path) text = await this.host.getCbsSourceText(path);
     this.lastSeenText = text ?? "";
     this.watchedPath = path;
 
@@ -383,8 +401,10 @@ export class CbsPanelView extends ItemView {
   }
 
   // 값 입력 시 프리뷰만 갱신(전체 재렌더 없이).
+  // 기억된 소스 파일의 에디터 원문을 읽는다(패널에 포커스가 있어도 에디터
+  // 리프는 열려있으므로 동기 판독 가능).
   private refreshPreviewOnly(path: string): void {
-    const text = this.host.getActiveEditorText();
+    const text = this.host.getCbsSourceTextSync(path);
     if (text === null) return;
     const values = this.host.getCbsTestValues(path);
     const result = this.evalPreview(text, values);

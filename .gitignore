@@ -5,3 +5,7 @@ deploy.local.json
 relay/store.json
 *.log
 .DS_Store
+
+# 프롬프트 예시 / 캐릭터 카드 파일은 repo에 올리지 않는다.
+hellena.md
+소악마.md

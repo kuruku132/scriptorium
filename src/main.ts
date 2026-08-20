@@ -2,6 +2,7 @@ import {
   MarkdownView,
   Notice,
   Plugin,
+  TAbstractFile,
   TFile,
   TFolder,
   WorkspaceLeaf
@@ -67,6 +68,7 @@ import {
   CBS_PREVIEW_VIEW_TYPE,
   CbsPreviewView
 } from "./ui/cbs-preview";
+import { CbsSourceTracker } from "./ui/cbs-source-tracker";
 import { CbsSnippetModal } from "./ui/snippet-modal";
 import { VaultScanGuard } from "./app/vault-scan-guard";
 import { ProjectRuntime } from "./app/project-runtime";
@@ -98,6 +100,10 @@ export default class ScriptoriumPlugin
     relayMessage: "꺼짐"
   };
   private cbsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  // CBS 소스 추적: 마지막으로 실제 선택된 Markdown 문서를 기억. 분할 프리뷰와
+  // 테스트 패널이 리프 포커스 변화(사이드바/플러그인/CBS 프리뷰 리프)에도
+  // 해당 문서에 고정되도록 한다. 패널·프리뷰 양쪽이 같은 소스를 공유한다.
+  private readonly cbsSource = new CbsSourceTracker();
 
   async onload(): Promise<void> {
     const raw = (await this.loadData()) as unknown;
@@ -109,6 +115,11 @@ export default class ScriptoriumPlugin
     );
     this.settings = this.data.settings;
     await this.saveSettings();
+
+    // 시작 시 활성 Markdown 파일이 있으면 CBS 소스로 미리 기억.
+    if (activeFile && activeFile.extension === "md") {
+      this.cbsSource.selectMarkdown(activeFile.path);
+    }
 
     this.view = new ViewCoordinator(this.app);
 
@@ -327,6 +338,12 @@ export default class ScriptoriumPlugin
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file) void this.runtime.followFile(file);
+        this.onCbsSourceFileOpen(file);
+      })
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        this.onCbsSourceActiveLeafChange(leaf);
       })
     );
     this.registerEvent(
@@ -336,13 +353,40 @@ export default class ScriptoriumPlugin
       this.app.vault.on("modify", (file) => this.runtime.notifyVaultChange(file))
     );
     this.registerEvent(
-      this.app.vault.on("delete", (file) => this.runtime.notifyVaultChange(file))
+      this.app.vault.on("delete", (file) => {
+        this.runtime.notifyVaultChange(file);
+        this.onCbsSourceDelete(file);
+      })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         void this.runtime.handleRename(file, oldPath);
+        this.onCbsSourceRename(file, oldPath);
       })
     );
+  }
+
+  // ── CBS 소스 추적 이벤트 ────────────────────────────────────────
+  // file-open: Markdown 파일이 열리면 소스 갱신, 비-Markdown(이미지 등)이면 유지.
+  private onCbsSourceFileOpen(file: TFile | null): void {
+    if (!file) return; // file 이 null 이면 기존 기억 소스 유지
+    this.cbsSource.onFileOpen(file.path, file.extension === "md");
+  }
+
+  // active-leaf-change: 활성 리프가 Markdown 에디터일 때만 소스 갱신.
+  // 사이드바/플러그인/CBS 프리뷰 리프 등 비-Markdown 리프 → 소스 유지.
+  private onCbsSourceActiveLeafChange(leaf: WorkspaceLeaf | null): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    this.cbsSource.onActiveLeafChange(view?.file?.path ?? null);
+    void leaf; // leaf 인자는 Obsidian 시그니처 호환용(미사용).
+  }
+
+  private onCbsSourceRename(file: TAbstractFile, oldPath: string): void {
+    if (file instanceof TFile) this.cbsSource.onRename(oldPath, file.path);
+  }
+
+  private onCbsSourceDelete(file: TAbstractFile): void {
+    if (file instanceof TFile) this.cbsSource.onDelete(file.path);
   }
 
   /**
@@ -408,8 +452,44 @@ export default class ScriptoriumPlugin
   }
 
   // ── CbsPanelHost ───────────────────────────────────────────────
-  // CBS 테스트 패널/프리뷰가 활성 Markdown 에디터 원문을 읽고 테스트 값을
+  // CBS 테스트 패널/프리뷰가 CBS 소스 Markdown 문서 원문을 읽고 테스트 값을
   // 영속화할 수 있도록 플러그인이 제공하는 호스트 인터페이스.
+  // 소스는 "마지막으로 실제 선택된 Markdown 문서"에 고정되며, 리프 포커스가
+  // 사이드바/플러그인/CBS 프리뷰 등 비-Markdown 리프로 옮겨가도 비워지지 않는다.
+
+  // 기억된 CBS 소스 Markdown 파일을 찾는다(열려있는 에디터가 우선, 미저장
+  // 편집을 보존; 없으면 볼트에서 읽는다).
+  private findMarkdownViewForPath(path: string): MarkdownView | null {
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === path) return view;
+    }
+    return null;
+  }
+
+  // 기억된 CBS 소스 경로. 패널·프리뷰 양쪽이 이 값을 공유해 같은 문서를 본다.
+  getCbsSourcePath(): string | null {
+    return this.cbsSource.resolve();
+  }
+
+  // 기억된 CBS 소스의 원문. 해당 파일이 어딘가 에디터로 열려있으면 그 에디터의
+  // 원문(미저장 편집 포함)을, 아니면 볼트의 현재 내용을 읽는다. 포커스가
+  // Markdown 에디터를 떠나도 소스가 사라지지 않는다.
+  async getCbsSourceText(path: string): Promise<string | null> {
+    const view = this.findMarkdownViewForPath(path);
+    if (view) return view.editor.getValue();
+    const file = this.app.vault.getFileByPath(path);
+    if (file instanceof TFile) return this.app.vault.cachedRead(file);
+    return null;
+  }
+
+  // 동기 판독: 에디터가 열려있으면 즉시 반환, 아니면 null(비동기 cachedRead 로
+  // 폴백). 폴링 경로에서 에디터 원문을 빠르게 읽기 위한 보조.
+  getCbsSourceTextSync(path: string): string | null {
+    const view = this.findMarkdownViewForPath(path);
+    return view ? view.editor.getValue() : null;
+  }
 
   getActiveEditorText(): string | null {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);

@@ -85,15 +85,23 @@ export class CbsPreviewView extends ItemView {
   }
 
   private onLeafChange(): void {
-    const path = this.host.getActiveFilePath();
+    // 기억된 CBS 소스가 바뀐 경우(다른 Markdown 문서를 실제로 열었을 때)만
+    // 강제 갱신. 비-Markdown 리프로 포커스가 옮겨간 경우 소스는 유지되므로
+    // watchedPath 와 같아 갱신하지 않는다 → 프리뷰가 사라지지 않는다.
+    const path = this.host.getCbsSourcePath();
     if (path !== this.watchedPath) {
       void this.maybeRefresh(true);
     }
   }
 
   private async maybeRefresh(force = false): Promise<void> {
-    const path = this.host.getActiveFilePath();
-    const text = this.host.getActiveEditorText();
+    // 소스는 기억된 Markdown 문서(포커스 변화에 비워지지 않음).
+    const path = this.host.getCbsSourcePath();
+    // 에디터가 열려있으면 동기로 빠르게, 아니면 볼트에서 비동기로 읽는다.
+    let text: string | null = path ? this.host.getCbsSourceTextSync(path) : null;
+    if (text === null && path) {
+      text = await this.host.getCbsSourceText(path);
+    }
     const values = path ? this.host.getCbsTestValues(path) : null;
     const valuesKey = values ? JSON.stringify(values) : "";
     if (
@@ -105,7 +113,10 @@ export class CbsPreviewView extends ItemView {
       return;
     }
 
-    if (text === null) {
+    // 빈 상태는 기억된 소스가 진짜 없거나(아무 Markdown 도 연 적 없거나 삭제됨)
+    // 읽을 수 없을 때만. 비-Markdown 리프로 포커스가 옮겨간 것만으로는
+    // 빈 상태로 가지 않는다.
+    if (!path || text === null) {
       this.renderComponent?.unload();
       this.renderComponent = null;
       this.bodyEl.empty();

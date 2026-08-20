@@ -156,6 +156,202 @@ describe("evaluate — math {{? }}", () => {
   });
 });
 
+// 스크립토리움 런타임 스크린샷 회귀: RisuAI calcString 호환 연산자.
+// 단일 '=' 도 동등 연산자로 동작해야 하며, 유효한 RisuAI 수식이
+// "수식에 허용되지 않은 문자: =" / "수식에 허용되지 않은 문자: {" 오류를
+// 내서는 안 된다.
+describe("evaluate — math operator compatibility (screenshot regression)", () => {
+  // 오류 박스에 호환성 버그 메시지가 없는지 확인하는 헬퍼.
+  function evFull(source: string, c: EvalContext = ctx()) {
+    return evaluate(source, c);
+  }
+  function noCompatError(r: { value: string; errors: string[] }): void {
+    for (const e of r.errors) {
+      expect(e).not.toMatch(/수식에 허용되지 않은 문자: [={]/);
+    }
+  }
+
+  it("single = is equality (RisuAI normalizes == → =)", () => {
+    const r = evFull("{{? 1=1}}");
+    expect(r.value).toBe("1");
+    noCompatError(r);
+    expect(ev("{{? 1=1}}")).toBe("1");
+    expect(ev("{{? 1==1}}")).toBe("1");
+    expect(ev("{{? 1=2}}")).toBe("0");
+  });
+
+  it("!= / >= / <= comparisons", () => {
+    expect(ev("{{? 1!=2}}")).toBe("1");
+    expect(ev("{{? 2>=1}}")).toBe("1");
+    expect(ev("{{? 1<=2}}")).toBe("1");
+    expect(ev("{{? 2>=3}}")).toBe("0");
+    expect(ev("{{? 3<=2}}")).toBe("0");
+  });
+
+  it("&& / || / ! logical operators", () => {
+    expect(ev("{{? 1&&1}}")).toBe("1");
+    expect(ev("{{? 1&&0}}")).toBe("0");
+    expect(ev("{{? 0||1}}")).toBe("1");
+    expect(ev("{{? 0||0}}")).toBe("0");
+    expect(ev("{{? !0}}")).toBe("1");
+    expect(ev("{{? !1}}")).toBe("0");
+  });
+
+  it("null normalizes to 0 in math", () => {
+    expect(ev("{{? null=0}}")).toBe("1");
+    expect(ev("{{? null>0}}")).toBe("0");
+    expect(ev("{{? 1+null}}")).toBe("1");
+  });
+
+  it("nested getglobalvar toggle with = comparison", () => {
+    const on = ctx({}, { test: true });
+    const off = ctx({}, { test: false });
+    expect(ev("{{? {{getglobalvar::toggle_test}}=1}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}=1}}", off)).toBe("0");
+    expect(ev("{{? {{getglobalvar::toggle_test}}>=1}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}<=2}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}==1}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}!=2}}", on)).toBe("1");
+  });
+
+  it("nested getglobalvar chat var with = comparison", () => {
+    expect(ev("{{? {{getglobalvar::counter}}=1}}", ctx({ counter: "1" }))).toBe("1");
+    expect(ev("{{? {{getglobalvar::counter}}=1}}", ctx({ counter: "2" }))).toBe("0");
+  });
+
+  it("length of nested getglobalvar > 0", () => {
+    expect(ev("{{? {{length::{{getglobalvar::tags}}}}>0}}", ctx({ tags: "" }))).toBe("0");
+    expect(ev("{{? {{length::{{getglobalvar::tags}}}}>0}}", ctx({ tags: "abc" }))).toBe("1");
+  });
+
+  it("deep nesting trim → length → comparison", () => {
+    const src = "{{? {{length::{{trim::{{getglobalvar::some_value}}}}}}>0}}";
+    expect(ev(src, ctx({ some_value: "abc" }))).toBe("1");
+    expect(ev(src, ctx({ some_value: "   " }))).toBe("0");
+    expect(ev(src, ctx({ some_value: "" }))).toBe("0");
+  });
+
+  it("runtime-dependent passthrough nested in math does not throw { error", () => {
+    // previous_chat_log 은 런타임 의존 패스스루 자리 → 원문 보존.
+    // 리터럴 { 가 수식 토크나이저에 들어가 "허용되지 않은 문자: {" 오류를
+    // 내지 않아야 한다.
+    const r = evFull("{{? {{previous_chat_log::x}}=1}}");
+    noCompatError(r);
+    expect(r.value).toBe("{{?{{previous_chat_log::x}}=1}}");
+  });
+
+  it("non-numeric value in math coerces to 0 (no char error)", () => {
+    const r = evFull("{{? {{getglobalvar::tags}}=1}}", ctx({ tags: "x" }));
+    noCompatError(r);
+    expect(r.value).toBe("0");
+  });
+
+  it("empty math expression returns 0", () => {
+    expect(ev("{{?}}")).toBe("0");
+    expect(ev("{{?   }}")).toBe("0");
+  });
+});
+
+// === 3차 호환성 패스: RisuAI calcString 충실 포트 회귀 ================
+// upstream RisuAI infunctions.ts 의 calcString/toRPN/calculateRPN 동작 회귀.
+// 핵심: 빈 피연산자를 0 으로 강제(=1→0=1, >0→0>0), 괄호 불일치·미지원 토큰을
+// 오류가 아닌 강제 처리로 다룬다. 유효한 RisuAI 수식(빈 런타임 값 포함)에 대해
+// "Unexpected math token" / "Unclosed parenthesis" / "수식에 허용되지 않은 문자: {"
+// 오류가 발생하지 않아야 한다.
+describe("evaluate — RisuAI calcString faithful port (3rd-pass regression)", () => {
+  function evFull(source: string, c: EvalContext = ctx()) {
+    return evaluate(source, c);
+  }
+  function noMathWarning(r: { value: string; errors: string[] }): void {
+    for (const e of r.errors) {
+      expect(e).not.toMatch(/Unexpected math token/i);
+      expect(e).not.toMatch(/Unclosed parenthesis/i);
+      expect(e).not.toMatch(/수식에 허용되지 않은 문자/i);
+      expect(e).not.toMatch(/괄호가 닫히지 않음/i);
+    }
+  }
+
+  it("exact screenshot failures: = / > comparisons produce 1/0", () => {
+    expect(ev("{{? 1=1}}")).toBe("1");
+    expect(ev("{{? 1=2}}")).toBe("0");
+    expect(ev("{{? 2>1}}")).toBe("1");
+    expect(ev("{{? 1>2}}")).toBe("0");
+    expect(ev("{{? 1!=2}}")).toBe("1");
+    expect(ev("{{? 1==1}}")).toBe("1");
+  });
+
+  it("exact screenshot failures produce no warnings", () => {
+    for (const src of ["{{? 1=1}}", "{{? 1=2}}", "{{? 2>1}}", "{{? 1>2}}"]) {
+      const r = evFull(src);
+      noMathWarning(r);
+      expect(r.errors).toEqual([]);
+    }
+  });
+
+  it("empty operands coerce to 0 (RisuAI: =1 → 0=1, >0 → 0>0)", () => {
+    expect(ev("{{? =1}}")).toBe("0");
+    expect(ev("{{? >0}}")).toBe("0");
+    const r1 = evFull("{{? =1}}");
+    const r2 = evFull("{{? >0}}");
+    noMathWarning(r1);
+    noMathWarning(r2);
+    expect(r1.errors).toEqual([]);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it("nested empty runtime value: {{getglobalvar::missing}} resolves to empty, coerces to 0", () => {
+    const empty = ctx(); // no 'missing' var
+    expect(ev("{{? {{getglobalvar::missing}}=1}}", empty)).toBe("0");
+    expect(ev("{{? {{getglobalvar::missing}}>0}}", empty)).toBe("0");
+    const r1 = evFull("{{? {{getglobalvar::missing}}=1}}", empty);
+    const r2 = evFull("{{? {{getglobalvar::missing}}>0}}", empty);
+    noMathWarning(r1);
+    noMathWarning(r2);
+    expect(r1.errors).toEqual([]);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it("parenthesized empty value does not emit unclosed-parenthesis warning", () => {
+    const empty = ctx();
+    expect(ev("{{? ({{getglobalvar::missing}})=1}}", empty)).toBe("0");
+    expect(ev("{{? ({{getglobalvar::missing}})>0}}", empty)).toBe("0");
+    const r1 = evFull("{{? ({{getglobalvar::missing}})=1}}", empty);
+    const r2 = evFull("{{? ({{getglobalvar::missing}})>0}}", empty);
+    noMathWarning(r1);
+    noMathWarning(r2);
+    expect(r1.errors).toEqual([]);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it("nested valid toggle value with = / >= / <= / !=", () => {
+    const on = ctx({}, { test: true });
+    const off = ctx({}, { test: false });
+    expect(ev("{{? {{getglobalvar::toggle_test}}=1}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}=1}}", off)).toBe("0");
+    expect(ev("{{? {{getglobalvar::toggle_test}}>=1}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}<=2}}", on)).toBe("1");
+    expect(ev("{{? {{getglobalvar::toggle_test}}!=2}}", on)).toBe("1");
+  });
+
+  it("deep nesting: getglobalvar → length → comparison, no literal braces reach math", () => {
+    // getglobalvar::toggle_tags → Scriptorium 토글 'tags' 매핑(접두 제거) → "1".
+    // length("1")=1 → 1>0 → 1. 핵심은 중첩 CBS 가 완전히 값으로 치환되어
+    // 수식에 { / {{ / }} 가 남지 않고 경고 없이 완료되는 것이다.
+    const c = ctx({}, { tags: true });
+    expect(ev("{{? {{length::{{getglobalvar::toggle_tags}}}}>0}}", c)).toBe("1");
+    const r = evFull("{{? {{length::{{getglobalvar::toggle_tags}}}}>0}}", c);
+    noMathWarning(r);
+    expect(r.errors).toEqual([]);
+  });
+
+  it("no literal { / {{ / }} reaches the math evaluator for parsed nested CBS", () => {
+    // 성공적으로 파싱된 중첩 CBS 는 값으로 치환되므로 수식에 { 가 남지 않는다.
+    const r = evFull("{{? {{getglobalvar::toggle_test}}=1}}", ctx({}, { test: true }));
+    noMathWarning(r);
+    expect(r.value).toBe("1");
+  });
+});
+
 describe("evaluate — puredisplay/code/escape", () => {
   it("puredisplay outputs raw without interpreting CBS", () => {
     expect(ev("{{#puredisplay}}{{char}}{{/}}", ctx())).toBe("{{char}}");
