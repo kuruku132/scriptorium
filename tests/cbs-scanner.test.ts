@@ -16,16 +16,26 @@ describe("scanCbsVariables", () => {
     expect(r.toggles).toEqual([]);
   });
 
-  it("extracts getglobalvar/setglobalvar names as chat vars", () => {
+  it("maps getglobalvar::toggle_NAME to a toggle, other globals to chat vars", () => {
+    // toggle::NAME 은 RisuAI에서 전역 변수 toggle_NAME 으로 구현되므로
+    // getglobalvar::toggle_SFW 는 토글 SFW 로, setglobalvar::G 는 채팅 변수 G 로.
     const r = scanCbsVariables("{{getglobalvar::toggle_SFW}}{{setglobalvar::G::1}}");
-    expect(r.chatVars).toEqual(["G", "toggle_SFW"]);
-    expect(r.toggles).toEqual([]);
+    expect(r.chatVars).toEqual(["G"]);
+    expect(r.toggles).toEqual(["SFW"]);
+  });
+
+  it("maps setglobalvar::toggle_NAME to a toggle too", () => {
+    const r = scanCbsVariables("{{setglobalvar::toggle_nsfw::1}}");
+    expect(r.toggles).toEqual(["nsfw"]);
+    expect(r.chatVars).toEqual([]);
   });
 
   it("does not double-count var:: inside getglobalvar::", () => {
     // getglobalvar 안의 var:: 부분문자열은 이름 경계가 아니므로 var:: 그룹이 잡지 않는다.
+    // toggle_model 은 토글 model 로 매핑된다.
     const r = scanCbsVariables("{{getglobalvar::toggle_model}}");
-    expect(r.chatVars).toEqual(["toggle_model"]);
+    expect(r.toggles).toEqual(["model"]);
+    expect(r.chatVars).toEqual([]);
   });
 
   it("extracts both sides of vis/visnot as chat vars", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parse, tokenize } from "../src/modules/cbs/parser";
+import { parse, splitArgs, tokenize } from "../src/modules/cbs/parser";
 
 describe("tokenize", () => {
   it("splits text and tag runs", () => {
@@ -99,5 +99,82 @@ describe("parse", () => {
     const nodes = parse("{{#each [1,2,3] n}}{{slot::n}}{{/}}");
     expect(nodes).toHaveLength(1);
     expect(nodes[0]?.type).toBe("block");
+  });
+});
+
+describe("tokenize — nested placeholders", () => {
+  it("matches the outer closing }} accounting for nested {{ }}", () => {
+    const tokens = tokenize("{{equal::{{getglobalvar::toggle_example}}::1}}");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toMatchObject({
+      type: "tag",
+      inner: "equal::{{getglobalvar::toggle_example}}::1"
+    });
+  });
+
+  it("preserves surrounding text around a nested placeholder", () => {
+    const tokens = tokenize("a{{contains::{{slot::item}}::hello}}b");
+    expect(tokens).toEqual([
+      { type: "text", value: "a" },
+      { type: "tag", inner: "contains::{{slot::item}}::hello" },
+      { type: "text", value: "b" }
+    ]);
+  });
+
+  it("handles two levels of nesting", () => {
+    const tokens = tokenize("{{contains::{{previous_chat_log::{{slot::item}}}}::hello}}");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toMatchObject({
+      type: "tag",
+      inner: "contains::{{previous_chat_log::{{slot::item}}}}::hello"
+    });
+  });
+});
+
+describe("splitArgs — depth-aware argument splitting", () => {
+  it("splits top-level :: only", () => {
+    expect(splitArgs("equal::a::b")).toEqual(["equal", "a", "b"]);
+  });
+
+  it("does not split :: inside nested {{ }}", () => {
+    expect(splitArgs("equal::{{getglobalvar::toggle_example}}::1")).toEqual([
+      "equal",
+      "{{getglobalvar::toggle_example}}",
+      "1"
+    ]);
+  });
+
+  it("does not split :: inside two levels of nesting", () => {
+    expect(splitArgs("contains::{{previous_chat_log::{{slot::item}}}}::hello")).toEqual([
+      "contains",
+      "{{previous_chat_log::{{slot::item}}}}",
+      "hello"
+    ]);
+  });
+
+  it("returns the whole string when there is no separator", () => {
+    expect(splitArgs("char")).toEqual(["char"]);
+  });
+});
+
+describe("parse — nested placeholder arguments", () => {
+  it("parses equal with a nested getglobalvar as one placeholder with two args", () => {
+    const nodes = parse("{{equal::{{getglobalvar::toggle_example}}::1}}");
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      type: "placeholder",
+      name: "equal",
+      args: ["{{getglobalvar::toggle_example}}", "1"]
+    });
+  });
+
+  it("parses contains with a nested previous_chat_log", () => {
+    const nodes = parse("{{contains::{{previous_chat_log::{{slot::item}}}}::hello}}");
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      type: "placeholder",
+      name: "contains",
+      args: ["{{previous_chat_log::{{slot::item}}}}", "hello"]
+    });
   });
 });

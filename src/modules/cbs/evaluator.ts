@@ -242,30 +242,26 @@ function evalCondition(cond: string, ctx: EvalContext): boolean {
 
 // === 수식 평가 ============================================================
 
-// 수식 내의 중첩 {{...}} 플레이스홀더를 값으로 치환한 뒤 안전하게 수식 파싱.
-function resolveInline(expr: string, ctx: EvalContext): string {
+// 인자/수식 내의 중첩 {{...}} 플레이스홀더를 재귀 평가해 값으로 치환.
+// parse() 가 깊이 인지 토큰화를 하므로 중첩 CBS 도 정확히 치환한다.
+// 텍스트 노드는 evalText 변환(<user> 등) 없이 원문 그대로 둔다(인자 리터럴 보존).
+function resolveNested(arg: string, ctx: EvalContext): string {
+  if (!arg || !arg.includes("{{")) return arg;
   let out = "";
-  let i = 0;
-  while (i < expr.length) {
-    if (expr.charAt(i) === "{" && expr.charAt(i + 1) === "{") {
-      const end = expr.indexOf("}}", i + 2);
-      if (end < 0) {
-        out += expr.slice(i);
-        break;
-      }
-      const inner = expr.slice(i + 2, end).trim();
-      out += evalPlaceholderName(inner, ctx);
-      i = end + 2;
+  for (const node of parse(arg)) {
+    if (node.type === "text") {
+      out += node.value;
+    } else if (node.type === "placeholder") {
+      out += evalPlaceholder(node.name, node.args, node.raw, ctx);
     } else {
-      out += expr.charAt(i);
-      i += 1;
+      out += evalBlock(node, ctx);
     }
   }
   return out;
 }
 
 function mathEval(expr: string, ctx: EvalContext): string {
-  const resolved = resolveInline(expr, ctx);
+  const resolved = resolveNested(expr, ctx);
   try {
     const tokens = tokenizeMath(resolved);
     const { value, pos } = parseMath(tokens, 0);
@@ -577,16 +573,6 @@ const PASSTHROUGH_PLACEHOLDERS = new Set([
   "iserror"
 ]);
 
-function evalPlaceholderName(inner: string, ctx: EvalContext): string {
-  const trimmed = inner.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith("//")) return ""; // 주석
-  if (trimmed.startsWith("__")) return ""; // 내부 전용
-  if (trimmed.startsWith("?")) return mathEval(trimmed.slice(1).trim(), ctx);
-  const parts = trimmed.split("::");
-  return evalPlaceholder(parts[0] ?? "", parts.slice(1), trimmed, ctx);
-}
-
 function evalPlaceholder(
   rawName: string,
   args: string[],
@@ -596,51 +582,93 @@ function evalPlaceholder(
   if (rawName === "?") return mathEval(args[0] ?? "", ctx);
   const name = PLACEHOLDER_ALIASES[rawName] ?? rawName;
 
+  // 패스스루: 원문 그대로(RisuAI가 채울 자리).
+  // 런타임 의존 자리(previous_chat_log 등)는 Scriptorium에서 흉내 낼 수 없으므로
+  // 중첩 CBS 평가 없이 원문을 보존해 경고/구문 오류로 취급하지 않는다.
+  if (PASSTHROUGH_PLACEHOLDERS.has(name)) {
+    return `{{${raw}}}`;
+  }
+
+  // 중첩 CBS 인자 재귀 평가. {{equal::{{getvar::X}}::1}} 같은 인자가
+  // 바깥 플레이스홀더 평가 전에 먼저 값으로 치환되도록 한다.
+  const a = args.map((x) => resolveNested(x, ctx));
+
   // 변수 조작
   // getglobalvar/setglobalvar은 전역 변수 공간이지만 CBS 테스트 패널에서는
-  // 로컬 채팅 변수와 같은 값 저장소를 사용하므로 chatVars로 읽고 쓴다.
-  if (name === "getglobalvar") return ctx.chatVars[args[0] ?? ""] ?? "";
+  // 로컬 채팅 변수와 같은 값 저장소를 사용한다.
+  // 단, RisuAI의 toggle::NAME 은 전역 변수 toggle_NAME 으로 구현되므로
+  // getglobalvar::toggle_NAME / setglobalvar::toggle_NAME 은
+  // 패널의 토글 NAME 에 매핑한다.
+  if (name === "getglobalvar") {
+    const key = a[0] ?? "";
+    if (key.startsWith("toggle_")) {
+      return ctx.toggles[key.slice("toggle_".length)] ? "1" : "0";
+    }
+    return ctx.chatVars[key] ?? "";
+  }
   if (name === "setglobalvar") {
-    if (args[0] !== undefined) ctx.chatVars[args[0]] = args.slice(1).join("::");
+    const key = a[0];
+    if (key !== undefined) {
+      if (key.startsWith("toggle_")) {
+        ctx.toggles[key.slice("toggle_".length)] = isTruthy(a.slice(1).join("::"));
+      } else {
+        ctx.chatVars[key] = a.slice(1).join("::");
+      }
+    }
     return "";
   }
-  if (name === "getvar") return ctx.chatVars[args[0] ?? ""] ?? "";
+  if (name === "getvar") return ctx.chatVars[a[0] ?? ""] ?? "";
   if (name === "setvar") {
-    if (args[0] !== undefined) ctx.chatVars[args[0]] = args.slice(1).join("::");
+    if (a[0] !== undefined) ctx.chatVars[a[0]] = a.slice(1).join("::");
     return "";
   }
   if (name === "setdefaultvar") {
-    if (args[0] !== undefined && ctx.chatVars[args[0]] === undefined) {
-      ctx.chatVars[args[0]] = args.slice(1).join("::");
+    if (a[0] !== undefined && ctx.chatVars[a[0]] === undefined) {
+      ctx.chatVars[a[0]] = a.slice(1).join("::");
     }
     return "";
   }
   if (name === "addvar") {
-    if (args[0] !== undefined) {
-      const cur = toNumber(ctx.chatVars[args[0]] ?? "0");
-      ctx.chatVars[args[0]] = String(cur + toNumber(args[1] ?? "0"));
+    if (a[0] !== undefined) {
+      const cur = toNumber(ctx.chatVars[a[0]] ?? "0");
+      ctx.chatVars[a[0]] = String(cur + toNumber(a[1] ?? "0"));
     }
     return "";
   }
-  if (name === "tempvar") return ctx.tempVars[args[0] ?? ""] ?? "";
+  if (name === "tempvar") return ctx.tempVars[a[0] ?? ""] ?? "";
   if (name === "settempvar") {
-    if (args[0] !== undefined) ctx.tempVars[args[0]] = args.slice(1).join("::");
+    if (a[0] !== undefined) ctx.tempVars[a[0]] = a.slice(1).join("::");
     return "";
   }
   if (name === "declare") return "";
-  if (name === "return") return args.join("::");
+  if (name === "return") return a.join("::");
 
   // 루프 / 함수 인자
   if (name === "slot") {
-    if (args[0]) return ctx.tempVars[args[0]] ?? "";
+    if (a[0]) return ctx.tempVars[a[0]] ?? "";
     return ctx.loopElement;
   }
   if (name === "arg") {
     const frame = ctx.callStack[ctx.callStack.length - 1];
-    const idx = toNumber(args[0] ?? "0");
+    const idx = toNumber(a[0] ?? "0");
     return frame ? frame[idx] ?? "" : "";
   }
-  if (name === "call") return evalCall(args, ctx);
+  if (name === "call") return evalCall(a, ctx);
+
+  // 논리 / 비교 / 문자열 검사(RisuAI 호환: 참="1", 거짓="0")
+  if (name === "equal") return a[0] === a[1] ? "1" : "0";
+  if (name === "notequal") return a[0] !== a[1] ? "1" : "0";
+  if (name === "contains") {
+    const haystack = a[0] ?? "";
+    const needle = a[1] ?? "";
+    return haystack.includes(needle) ? "1" : "0";
+  }
+  if (name === "startswith") {
+    return (a[0] ?? "").startsWith(a[1] ?? "") ? "1" : "0";
+  }
+  if (name === "endswith") {
+    return (a[0] ?? "").endsWith(a[1] ?? "") ? "1" : "0";
+  }
 
   // 캐릭터/프롬프트 메타(목 값)
   if (name === "char") return ctx.mockMeta.char;
@@ -680,16 +708,11 @@ function evalPlaceholder(
   if (name === "prefillsupported" || name === "prefill_supported" || name === "prefill")
     return "true";
   if (name === "metadata") return "";
-  if (name === "calc") return mathEval(args.join("::"), ctx);
-
-  // 패스스루: 원문 그대로(RisuAI가 채울 자리)
-  if (PASSTHROUGH_PLACEHOLDERS.has(name)) {
-    return `{{${raw}}}`;
-  }
+  if (name === "calc") return mathEval(a.join("::"), ctx);
 
   // 알려진 단일 연산(문자열/수학/배열 등)은 지원 범위 밖 → 원문 보존
   ctx.errors.push(`미지원 플레이스홀더: {{${raw}}}`);
-  return `{{${raw}}}`;
+  return `{{${raw}}`;
 }
 
 function evalCall(args: string[], ctx: EvalContext): string {

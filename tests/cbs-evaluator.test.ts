@@ -226,3 +226,82 @@ describe("evaluate — limits marker", () => {
     expect(MAX_CALL_DEPTH).toBeGreaterThan(0);
   });
 });
+
+describe("evaluate — comparison / string-check functions", () => {
+  it("equal returns 1/0 for exact string equality", () => {
+    expect(ev("{{equal::abc::abc}}")).toBe("1");
+    expect(ev("{{equal::abc::abcd}}")).toBe("0");
+    expect(ev("{{equal::1::1}}")).toBe("1");
+  });
+
+  it("notequal returns 1/0", () => {
+    expect(ev("{{notequal::a::b}}")).toBe("1");
+    expect(ev("{{notequal::a::a}}")).toBe("0");
+  });
+
+  it("not_equal alias maps to notequal", () => {
+    expect(ev("{{not_equal::a::b}}")).toBe("1");
+  });
+
+  it("contains is case-sensitive substring match", () => {
+    expect(ev("{{contains::hello world::world}}")).toBe("1");
+    expect(ev("{{contains::hello world::World}}")).toBe("0");
+    expect(ev("{{contains::abc::d}}")).toBe("0");
+  });
+
+  it("startswith / endswith", () => {
+    expect(ev("{{startswith::hello::he}}")).toBe("1");
+    expect(ev("{{startswith::hello::lo}}")).toBe("0");
+    expect(ev("{{endswith::hello::lo}}")).toBe("1");
+    expect(ev("{{endswith::hello::he}}")).toBe("0");
+  });
+});
+
+describe("evaluate — getglobalvar toggle mapping", () => {
+  it("getglobalvar::toggle_NAME reads the panel toggle NAME", () => {
+    expect(ev("{{getglobalvar::toggle_test}}", ctx({}, { test: true }))).toBe("1");
+    expect(ev("{{getglobalvar::toggle_test}}", ctx({}, { test: false }))).toBe("0");
+  });
+
+  it("getglobalvar::NAME (non-toggle) reads chat vars", () => {
+    expect(ev("{{getglobalvar::G}}", ctx({ G: "v" }))).toBe("v");
+  });
+
+  it("setglobalvar::toggle_NAME writes the panel toggle", () => {
+    const c = ctx();
+    ev("{{setglobalvar::toggle_test::1}}", c);
+    expect(c.toggles.test).toBe(true);
+    ev("{{setglobalvar::toggle_test::0}}", c);
+    expect(c.toggles.test).toBe(false);
+  });
+});
+
+describe("evaluate — nested placeholders", () => {
+  it("equal with nested getglobalvar toggle on → 1", () => {
+    const src = "{{equal::{{getglobalvar::toggle_test}}::1}}";
+    expect(ev(src, ctx({}, { test: true }))).toBe("1");
+  });
+
+  it("equal with nested getglobalvar toggle off → 0", () => {
+    const src = "{{equal::{{getglobalvar::toggle_test}}::1}}";
+    expect(ev(src, ctx({}, { test: false }))).toBe("0");
+  });
+
+  it("contains with nested previous_chat_log preserves passthrough (no warning)", () => {
+    // previous_chat_log 는 런타임 의존 자리로 원문 보존. contains 는 그 보존된
+    // 문자열에 대해 평가하되 구문 오류/경고로 취급하지 않는다.
+    const c = ctx();
+    const result = evaluate("{{contains::{{previous_chat_log::{{slot::item}}}}::hello}}", c);
+    expect(result.value).toBe("0");
+    expect(c.errors).toEqual([]);
+  });
+
+  it("nested placeholders produce no false warnings", () => {
+    const c = ctx({}, { test: true });
+    evaluate(
+      "{{equal::{{getglobalvar::toggle_test}}::1}}{{contains::{{previous_chat_log::{{slot::item}}}}::hello}}",
+      c
+    );
+    expect(c.errors).toEqual([]);
+  });
+});

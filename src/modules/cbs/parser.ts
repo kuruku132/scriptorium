@@ -1,7 +1,9 @@
 // CBS 토크나이저 + 블록 파서.
 // 원시 문서 문자열을 CbsNode AST로 변환한다. 평가는 evaluator.ts가 담당.
 // RisuAI CBS 문법 사양: docs/risuai-placeholder-syntax.md
-// CBS 인자에는 # : { } 줄바꿈을 넣을 수 없으므로(사양 §5) {{ 다음 첫 }} 가 토큰 종료.
+// CBS 플레이스홀더는 중첩을 허용한다(예: {{equal::{{getvar::X}}::1}}).
+// 따라서 {{ ... }} 토큰 종료는 첫 }} 가 아니라 깊이를 세어 일치하는 }} 로 찾고,
+// 인자 구분자 :: 도 중첩 {{ ... }} 내부에서는 분리자로 취급하지 않는다.
 
 export interface TextNode {
   type: "text";
@@ -38,6 +40,8 @@ export type RawToken = RawTextToken | RawTagToken;
 export class CbsParseError extends Error {}
 
 // {{ ... }} 토큰과 텍스트 런으로 분리.
+// 중첩 {{ ... }} 깊이를 세어 바깥 토큰을 닫는 진짜 }} 를 찾는다.
+// 단일 { 혹은 } 는 텍스트로 취급하며 깊이에 영향을 주지 않는다.
 export function tokenize(source: string): RawToken[] {
   const tokens: RawToken[] = [];
   const length = source.length;
@@ -49,8 +53,26 @@ export function tokenize(source: string): RawToken[] {
       if (cursor > textStart) {
         tokens.push({ type: "text", value: source.slice(textStart, cursor) });
       }
-      const end = source.indexOf("}}", cursor + 2);
+      let depth = 1;
+      let i = cursor + 2;
+      let end = -1;
+      while (i < length) {
+        if (source.charAt(i) === "{" && source.charAt(i + 1) === "{") {
+          depth += 1;
+          i += 2;
+        } else if (source.charAt(i) === "}" && source.charAt(i + 1) === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
       if (end < 0) {
+        // 닫히지 않은 {{: 원문을 텍스트로 둔다.
         tokens.push({ type: "text", value: source.slice(cursor) });
         return tokens;
       }
@@ -65,6 +87,32 @@ export function tokenize(source: string): RawToken[] {
     tokens.push({ type: "text", value: source.slice(textStart) });
   }
   return tokens;
+}
+
+// :: 인자 분리. 중첩 {{ ... }} 내부의 :: 는 분리자가 아니다.
+// 깊이 0 에서만 :: 를 기준으로 나눈다.
+export function splitArgs(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  let i = 0;
+  while (i < s.length) {
+    if (s.charAt(i) === "{" && s.charAt(i + 1) === "{") {
+      depth += 1;
+      i += 2;
+    } else if (s.charAt(i) === "}" && s.charAt(i + 1) === "}") {
+      if (depth > 0) depth -= 1;
+      i += 2;
+    } else if (depth === 0 && s.charAt(i) === ":" && s.charAt(i + 1) === ":") {
+      parts.push(s.slice(start, i));
+      i += 2;
+      start = i;
+    } else {
+      i += 1;
+    }
+  }
+  parts.push(s.slice(start));
+  return parts;
 }
 
 type Tag =
@@ -119,7 +167,7 @@ function classifyTag(inner: string): Tag {
     return { kind: "close", name: trimmed.slice(1).trim() };
   }
   if (trimmed.startsWith("?")) return { kind: "math", expr: trimmed.slice(1).trim() };
-  const parts = trimmed.split("::");
+  const parts = splitArgs(trimmed);
   return { kind: "placeholder", name: parts[0] ?? "", args: parts.slice(1) };
 }
 
