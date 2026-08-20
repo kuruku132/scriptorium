@@ -688,19 +688,20 @@
 .scriptorium-cbs-errors {
   margin-top: 8px;
   padding: 6px 8px;
-  border: 1px solid var(--background-modifier-error-border, var(--background-modifier-border));
+  border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
-  background: var(--background-modifier-error, var(--background-secondary));
+  background: var(--background-modifier-hover, var(--background-secondary));
 }
 
 .scriptorium-cbs-errors h5 {
   margin: 0 0 4px;
   font-size: var(--font-ui-smaller);
+  color: var(--text-warning, var(--text-muted));
 }
 
 .scriptorium-cbs-error-line {
   font-size: var(--font-ui-smaller);
-  color: var(--text-error, var(--text-muted));
+  color: var(--text-normal);
   font-family: var(--font-monospace);
 }
 
@@ -734,7 +735,7 @@
 .scriptorium-cbs-preview-body .scriptorium-cbs-errors {
   margin-top: var(--size-4-4);
   padding: var(--size-4-2) var(--size-4-3);
-  border: 1px solid var(--background-modifier-error-border, var(--background-modifier-border));
+  border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s);
-  background: var(--background-modifier-error, var(--background-modifier-hover));
+  background: var(--background-modifier-hover);
 }
